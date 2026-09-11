@@ -7,6 +7,7 @@
 > - 每条记录必须包含：改动摘要、影响文件、验证状态、已知问题
 > - 已修复的问题从"已知问题"移到"已修复"
 > - 不要删旧记录，只追加
+> - **每轮改动完成后：构建便携版（`npx electron-builder --win nsis` → `build/win-unpacked/AssetAgent.exe`）并直接打开给用户测试**（2026-09-11 约定）
 
 ---
 
@@ -362,7 +363,7 @@ npx electron-builder --win nsis
 | 2 | **四边面重拓扑未实现**：`want_quads` 只被记录，实际输出仍是三角面 | 四边面规则默认关闭 | W2 末 Spike | 决定是否真做（见 5.4.3） |
 | 3 | **云 Provider 端点未对照官方文档校正**：Meshy/Tripo/Rodin/混元3D 的 endpoint 是按下标写的（混元3D 的 TC3 签名是公共算法，动作名与 API 版号需重点核对） | 首次真实调用可能失败 | W1 | 端点集中在各 provider 文件顶部常量区 |
 | 4 | **烘焙与 FBX 导出未在真实 Blender 上验证**：`recipes/bpy/*.py` 只做了静态检查（含第七轮新增的 convert_to_glb.py） | 装了 Blender 的机器上可能报错 | M3 | 需校正 Blender 4.x API 差异 |
-| 5 | **前端未在真实 Electron 里跑过**：代码已完成，但沙箱/无头环境无法创建 BrowserWindow | 首次真机启动可能遇到路径/端口/权限问题 | M1 | 在带显示器的开发机上验证 |
+| 5 | **前端未在真实 Electron 里跑过**：~~沙箱/无头环境无法创建 BrowserWindow~~ **2026-09-11 真机验证：便携版启动成功，壳自动拉起 sidecar（8756 健康检查通过），窗口正常弹出。剩 UI 交互（视口/导入/生成）由用户实测中** | 首次真机启动可能遇到路径/端口/权限问题 → 已基本排除 | M1 | 剩余项为 UI 层的实机走查 |
 | 6 | **Electron 在无头/沙箱环境启动受限**：`--disable-gpu` 仍不足绕过 | CI 无法做 E2E；不影响真机使用 | M1 | CI 可用 Playwright + `--remote-debugging-port` |
 | 7 | **资产包批量（工作流 B）未实现**：Planner 与风格圣经只有配置模板 | 只能逐件生成 | Phase 2 | 非 MVP 范围 |
 
@@ -410,5 +411,5 @@ npm run build       # Vite 生产构建
 ## 下一步（按优先级）
 
 1. **W1 必做**：拿到 API Key 后对照官方文档校正 Meshy / Tripo / 混元3D（TC3 动作名与版号）/ Rodin 端点
-2. **M1 验收**：在带显示器的开发机上双击 `build/AssetAgent Setup 0.1.0.exe` 安装启动，验证 Electron 壳 → sidecar 跨进程链路（sidecar 路径已实测通过，剩壳层未验证）
+2. **M1 验收**：便携版已在用户真机运行（壳拉起 sidecar 链路通过），剩 UI 交互实测：视口加载 GLB、工作流 C 导入 FBX/OBJ、版本树、设置页
 3. **M3 认领**：UV 零重叠方案、Blender 脚本实机校正（bpy 的烘焙/导出/转台；FBX 导入已由内置 ufbx 转换器真机验证，bpy convert_to_glb.py 仅是回落路径）
