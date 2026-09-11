@@ -17,6 +17,7 @@ const OP_LABELS: Record<string, string> = {
   uv: 'UV',
   bake: '烘焙',
   export: '导出',
+  rollback: '回滚',
 };
 
 interface Props {
@@ -24,9 +25,11 @@ interface Props {
   activeVersionId?: string | null;
   headVersionId?: string | null;
   onSelect: (version: VersionNode) => void;
+  /** 回滚到指定版本（非破坏性：产生一个新的当前版本）。缺省不显示按钮。 */
+  onRollback?: (version: VersionNode) => void;
 }
 
-export function VersionTree({ versions, activeVersionId, headVersionId, onSelect }: Props) {
+export function VersionTree({ versions, activeVersionId, headVersionId, onSelect, onRollback }: Props) {
   if (versions.length === 0) {
     return <div className="empty">还没有版本节点。生成或跑一次管线后就会出现在这里。</div>;
   }
@@ -56,6 +59,18 @@ export function VersionTree({ versions, activeVersionId, headVersionId, onSelect
             {version.skipped_reason && <span className="badge skipped" style={{ marginLeft: 6 }}>跳过</span>}
             {typeof version.stats?.face_count === 'number' && (
               <span className="muted"> · {version.stats.face_count} 面</span>
+            )}
+            {onRollback && !isHead && (
+              <button
+                style={{ marginLeft: 8, padding: '1px 8px', fontSize: 12 }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRollback(version);
+                }}
+                title="把这个版本的网格复制为新的当前版本（不删除任何历史）"
+              >
+                回滚到此
+              </button>
             )}
           </div>
         );

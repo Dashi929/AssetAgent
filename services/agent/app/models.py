@@ -54,6 +54,8 @@ class VersionOp(str, Enum):
     UV = "uv"
     BAKE = "bake"
     EXPORT = "export"
+    # 回滚不删历史：把旧版本的网格复制成新节点（见 routers/assets.py rollback）
+    ROLLBACK = "rollback"
 
 
 class JobStep(str, Enum):
@@ -239,6 +241,10 @@ class GenerateBody(BaseModel):
 
 class PickVariantBody(BaseModel):
     variant_id: str
+
+
+class RollbackBody(BaseModel):
+    version_id: str
 
 
 class PipelineBody(BaseModel):

@@ -27,6 +27,7 @@ from ..models import (
     JobStep,
     PickVariantBody,
     PipelineBody,
+    RollbackBody,
     SpecPreset,
     Variant,
     VersionNode,
@@ -471,6 +472,55 @@ async def export(asset_id: str, body: ExportBody) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ 其它
+
+
+@router.post("/{asset_id}/rollback")
+async def rollback_to_version(asset_id: str, body: RollbackBody) -> dict[str, Any]:
+    """非破坏性回滚：把目标版本的网格复制成**新的当前版本**（op=rollback）。
+
+    不删任何历史、不移动任何旧节点 —— 版本树只增不改，这是 store 的铁律。
+    回滚后资产回到 PROCESSING：可以直接导出（head 即回滚产物），
+    也可以重跑管线从头再处理一遍。
+    """
+    _require_asset(asset_id)
+    try:
+        target = store.get_version(asset_id, body.version_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    mesh_path = Path(target.mesh_path)
+    if not mesh_path.exists():
+        raise HTTPException(
+            status_code=409,
+            detail="目标版本的网格文件已丢失，无法回滚。请选择其它版本，或重跑管线生成新版本。",
+        )
+
+    node = VersionNode(
+        asset_id=asset_id,
+        parent_id=target.id,
+        op=VersionOp.ROLLBACK,
+        label=f"回滚自 {target.op}",
+        params={"rolled_back_from": target.id, "source_op": target.op},
+        mesh_path="",
+    )
+    directory = store.version_dir(asset_id, node.id)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    node.mesh_path = str(directory / "mesh.glb")
+    shutil.copy2(mesh_path, node.mesh_path)
+    # OBJ 副本是四边面/n-gon 规则的测量文件：原版本有就带上，没有就清掉引用
+    node.stats = {k: v for k, v in target.stats.items() if k not in {"obj_path", "obj_error"}}
+    source_obj = target.stats.get("obj_path")
+    if source_obj and Path(source_obj).exists():
+        shutil.copy2(source_obj, directory / "mesh.obj")
+        node.stats["obj_path"] = str(directory / "mesh.obj")
+
+    store.add_version(node)
+    store.patch_asset(asset_id, status=AssetStatus.PROCESSING)
+    telemetry.record(
+        "rollback", asset_id=asset_id, version_id=target.id, new_version_id=node.id
+    )
+    return _asset_summary(store.get_asset(asset_id))
 
 
 @router.post("/{asset_id}/archive")

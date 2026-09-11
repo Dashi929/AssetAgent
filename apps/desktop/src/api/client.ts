@@ -141,6 +141,13 @@ export const api = {
       body: JSON.stringify({ variant_id: variantId }),
     }),
 
+  /** 非破坏性回滚：把目标版本复制成新的当前版本，历史不丢。 */
+  rollbackToVersion: (assetId: string, versionId: string) =>
+    request<AssetSummary>(`/api/assets/${assetId}/rollback`, {
+      method: 'POST',
+      body: JSON.stringify({ version_id: versionId }),
+    }),
+
   runPipeline: (assetId: string, steps?: string[]) =>
     request<{ job: Job }>(`/api/assets/${assetId}/pipeline`, {
       method: 'POST',

@@ -86,6 +86,17 @@ export function AssetDetail() {
     });
   };
 
+  const rollback = async (version: VersionNode) => {
+    await handle(async () => {
+      await api.rollbackToVersion(asset.id, version.id);
+      await openAsset(asset.id);
+      // 回滚产生新的 head：让视口切过去看结果
+      setActiveVersionId(null);
+      setHighlight([]);
+      return true;
+    });
+  };
+
   const doExport = async () => {
     const result = await handle(() =>
       api.exportAsset(asset.id, preset, allowFailedExport),
@@ -297,6 +308,7 @@ export function AssetDetail() {
                 setActiveVersionId(version.id);
                 setHighlight([]);
               }}
+              onRollback={rollback}
             />
           </div>
 
