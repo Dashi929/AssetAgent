@@ -25,6 +25,10 @@ const api = {
     return () => ipcRenderer.removeListener('sidecar:status', listener);
   },
   reveal: (target: string): Promise<void> => ipcRenderer.invoke('shell:reveal', target),
+  /** 渲染进程写一行日志到 logs/renderer.log（闪退排障用） */
+  appendLog: (line: string): void => ipcRenderer.send('logs:append', line),
+  /** 设置页"打开日志目录" */
+  revealLogs: (): Promise<void> => ipcRenderer.invoke('logs:reveal'),
   platform: process.platform,
 };
 

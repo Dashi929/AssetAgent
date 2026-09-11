@@ -26,9 +26,14 @@ const READY_TIMEOUT_MS = 60_000;
 export class SidecarManager {
   private child: ChildProcess | null = null;
   private logBuffer: string[] = [];
+  private logFd: number | null = null;
   private status: SidecarStatus = { state: 'stopped', baseUrl: '' };
 
-  constructor(private readonly repoRoot: string, private readonly isDev: boolean) {}
+  constructor(
+    private readonly repoRoot: string,
+    private readonly isDev: boolean,
+    private readonly logFile?: string,
+  ) {}
 
   getStatus(): SidecarStatus {
     return this.status;
@@ -53,6 +58,20 @@ export class SidecarManager {
         ? []  // .exe 内置了 uvicorn 启动逻辑
         : ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)];
 
+      // sidecar 自己的输出以前只进内存缓冲，应用一闪退就全没了；
+      // 现在同步落盘到 logs/sidecar.log，和主进程日志时间戳对齐
+      if (this.logFile) {
+        try {
+          this.logFd = fs.openSync(this.logFile, 'a');
+          fs.writeSync(
+            this.logFd,
+            `\n---- sidecar 启动 ${new Date().toISOString()} type=${exec.type} port=${port} ----\n`,
+          );
+        } catch {
+          this.logFd = null; // 日志写不进去不影响功能
+        }
+      }
+
       this.child = spawn(exec.path, args, {
         cwd: exec.type === 'python' ? this.sidecarDir() : path.dirname(exec.path),
         env: {
@@ -70,7 +89,9 @@ export class SidecarManager {
 
     this.child.stdout?.on('data', (chunk: Buffer) => this.appendLog(chunk.toString()));
     this.child.stderr?.on('data', (chunk: Buffer) => this.appendLog(chunk.toString()));
-    this.child.on('exit', (code) => {
+    this.child.on('exit', (code, signal) => {
+      this.writeLog(`---- sidecar 退出 code=${code} signal=${signal ?? '-'} ----\n`);
+      this.closeLog();
       if (this.status.state !== 'stopped') {
         this.status = {
           ...this.status,
@@ -93,7 +114,10 @@ export class SidecarManager {
 
   stop(): void {
     this.status = { ...this.status, state: 'stopped' };
-    if (!this.child) return;
+    if (!this.child) {
+      this.closeLog();
+      return;
+    }
     try {
       // Windows 下 SIGTERM 不一定能穿透到 Python，先试优雅退出再强杀
       this.child.kill();
@@ -115,10 +139,30 @@ export class SidecarManager {
   }
 
   private appendLog(text: string): void {
+    this.writeLog(text);
     for (const line of text.split(/\r?\n/)) {
       if (line.trim()) this.logBuffer.push(line.trim());
     }
     if (this.logBuffer.length > 400) this.logBuffer = this.logBuffer.slice(-400);
+  }
+
+  private writeLog(text: string): void {
+    if (this.logFd === null) return;
+    try {
+      fs.writeSync(this.logFd, text);
+    } catch {
+      /* 单次写失败不重试，日志不能反噬主流程 */
+    }
+  }
+
+  private closeLog(): void {
+    if (this.logFd === null) return;
+    try {
+      fs.closeSync(this.logFd);
+    } catch {
+      /* 已关闭 */
+    }
+    this.logFd = null;
   }
 
   private tail(lines = 20): string {

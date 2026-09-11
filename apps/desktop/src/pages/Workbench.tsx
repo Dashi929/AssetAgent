@@ -73,18 +73,30 @@ export function Workbench() {
     }
     const assetName = name.trim() || (mode === 'concept' ? 'SM_New_Prop' : 'SM_Imported_Prop');
 
+    // 闪退/报错时的最小 breadcrumb：导入开始 → 成功/失败 → 管线启动
+    const breadcrumb = (message: string) => window.assetagent?.appendLog(`[workbench] ${message}`);
+    if (mode === 'mesh') {
+      const f = pickedFiles[0];
+      breadcrumb(`导入开始 file=${f.name} size=${f.size}B`);
+    }
+
     const created = await handle(async () => {
       if (mode === 'concept') {
         return api.createAssetFromImages(pickedFiles, assetName, activePresetKey, prompt);
       }
       return api.createAssetFromMesh(pickedFiles[0], assetName, activePresetKey);
     });
-    if (!created) return;
+    if (!created) {
+      breadcrumb('导入失败（原因见上方错误提示与 sidecar.log）');
+      return;
+    }
+    breadcrumb(`导入完成 asset=${created.asset.id}`);
 
     await refreshAssets();
 
     if (mode === 'mesh') {
       // 工作流 C：直接进管线，不碰生成环节
+      breadcrumb(`管线启动 asset=${created.asset.id}`);
       const started = await handle(() => api.runPipeline(created.asset.id));
       if (started) trackJob(started.job);
       navigate(`/asset/${created.asset.id}`);

@@ -11,6 +11,35 @@
 
 ---
 
+## 2026-09-11 第九轮：闪退排障日志系统（三进程全链路）
+
+### 改动摘要
+用户拖 FBX 后应用"闪退"（三进程全灭，无任何现场）。本轮建立三路日志：主进程 / 渲染进程 / sidecar 分别落盘到 `%LOCALAPPDATA%\AssetAgent\logs`，挂上所有崩溃钩子；渲染进程崩溃从"退出全应用"改为"自动重载救回"；顺带阻断 Electron 的拖拽默认导航（拖到拖放区外会把窗口替换成 file://，症状与闪退一致——本次闪退的头号嫌疑）。
+
+### 现场勘查（闪退发生时的证据）
+- 用户拖入 `air-hockey.fbx`：**导入是成功的**（ufbx 转换的 GLB 健康：438 面、带 UV），资产与 3 个版本节点落盘完整
+- 管线 job 死在 **progress=0.6**（repair/decimate 已过、到 uv/bake 附近），随后 AssetAgent.exe + assetagent-sidecar.exe 全部消失
+- 无 crashpad 转储、无任何日志（这正是本轮要补的）
+
+### 详细变更
+
+| 文件 | 变更 |
+|---|---|
+| `electron/logging.ts` | 新增。日志目录解析（打包=%LOCALAPPDATA%\AssetAgent\logs，开发=仓库 .data/logs）+ `log(channel, msg)` 追加写（appendFileSync，崩的最后一行也落盘；单行截断 2000 字符） |
+| `electron/main.ts` | 挂钩：`uncaughtException` / `unhandledRejection` / `child-process-gone`（GPU 等子进程崩溃）/ `render-process-gone`（reason+exitCode）/ 渲染进程无响应 / console warning+error / did-fail-load。**render-process-gone 为 crash/oom 时自动重载窗口**（崩溃不再连锁退出全应用）。新 IPC：`logs:append`（前端日志）、`logs:reveal`（打开日志目录） |
+| `electron/sidecar.ts` | 构造函数加 `logFile` 参数：stdout/stderr 同步落盘 `logs/sidecar.log`（以前只进内存缓冲，应用一退全丢），启动/退出带分隔标记 |
+| `electron/preload.ts` + `src/global.d.ts` | 桥新增 `appendLog(line)` / `revealLogs()` |
+| `src/main.tsx` | ① window 层 dragover/drop preventDefault（阻断拖拽导航）；② `error` / `unhandledrejection` 全局钩子 → renderer.log |
+| `src/pages/Workbench.tsx` | 导入埋点：开始（含文件名/大小）→ 成功/失败 → 管线启动 |
+| `src/pages/Settings.tsx` | "查看日志"旁新增"打开日志目录"按钮 |
+
+### 验证状态
+- `npm run typecheck`：两个 tsconfig 均无错误
+- 便携版已重新构建并打开，**日志已实测在写**：main.log 记录启动 + sidecar 就绪，sidecar.log 开启记录
+- 闪退根因待复测：用户重拖 FBX 后读 `%LOCALAPPDATA%\AssetAgent\logs\`（main.log 最后一行 + sidecar.log 尾部 + renderer.log）即可定位
+
+---
+
 ## 2026-09-11 第八轮：ufbx 原生 FBX 导入 —— 摘掉 Blender 依赖
 
 ### 改动摘要
@@ -359,6 +388,7 @@ npx electron-builder --win nsis
 
 | # | 问题 | 影响 | 认领节点 | 备注 |
 |---|---|---|---|---|
+| 8 | **拖 FBX 后闪退，根因未定位**：导入本身成功（GLB 健康），管线 60% 时三进程全灭；怀疑渲染/GPU 进程崩溃连锁退出，或拖拽导航（第九轮已阻断） | 用户无法导入 FBX | **第九轮日志已就位，等复测** | 复测后读 `%LOCALAPPDATA%\AssetAgent\logs\` 三份日志定位 |
 | 1 | **UV 展开无法保证零重叠**：xatlas Python 绑定不暴露 padding，实测约 0.04% 面有微小重叠 | 校验器的 UV 重叠规则暂时按 WARN 报 | M3 | 需换 Blender Smart UV Project 或补去重叠后处理 |
 | 2 | **四边面重拓扑未实现**：`want_quads` 只被记录，实际输出仍是三角面 | 四边面规则默认关闭 | W2 末 Spike | 决定是否真做（见 5.4.3） |
 | 3 | **云 Provider 端点未对照官方文档校正**：Meshy/Tripo/Rodin/混元3D 的 endpoint 是按下标写的（混元3D 的 TC3 签名是公共算法，动作名与 API 版号需重点核对） | 首次真实调用可能失败 | W1 | 端点集中在各 provider 文件顶部常量区 |

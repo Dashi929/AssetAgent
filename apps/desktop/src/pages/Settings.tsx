@@ -139,6 +139,14 @@ export function Settings() {
             重启本地服务
           </button>
           <button onClick={loadLog}>查看日志</button>
+          <button
+            onClick={async () => {
+              const bridge = window.assetagent;
+              if (bridge) await bridge.revealLogs();
+            }}
+          >
+            打开日志目录
+          </button>
         </div>
         {log && (
           <pre

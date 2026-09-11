@@ -19,6 +19,10 @@ export interface AssetAgentBridge {
   getSidecarLog: () => Promise<string>;
   onSidecarStatus: (handler: (status: SidecarStatus) => void) => () => void;
   reveal: (target: string) => Promise<void>;
+  /** 渲染进程写一行日志（主进程落到 logs/renderer.log） */
+  appendLog: (line: string) => void;
+  /** 打开日志目录（logs/） */
+  revealLogs: () => Promise<void>;
   platform: string;
 }
 
