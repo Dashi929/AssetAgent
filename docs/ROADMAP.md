@@ -74,6 +74,7 @@ Provider 打通 → 生成落盘 → 修复/减面 → UV/烘焙 → 校验 → 
 | 2 | **四边面重拓扑未实现**：`want_quads` 只被记录，实际输出仍是三角面 | 四边面规则在配置里默认关闭 | W2 末的 Spike 结论决定是否真做（见 5.4.3） |
 | 3 | **云 Provider 端点未对照官方文档校正**：Meshy / Tripo / Rodin 的 endpoint 与字段是按下标写的 | 首次真实调用可能失败 | W1：拿到 Key 后逐一校正，端点集中在各 provider 文件顶部常量区 |
 | 4 | **烘焙与 FBX 导出未在真实 Blender 上验证**：`recipes/bpy/*.py` 只做了静态检查 | 装了 Blender 的机器上可能报错 | M3：在带 Blender 的机器上跑一次，校正 Blender 4.x API 差异 |
-| 5 | **前端未在真实 Electron 里跑过**：typecheck 与 vite build 通过，但 sidecar 拉起、视口加载 GLB、文件读取这些跨进程链路未实测 | 首次启动可能遇到路径/端口/权限问题 | M1：这是"骨架贯通"节点的验收内容 |
-| 6 | **资产包批量（工作流 B）未实现**：Planner 与风格圣经只有配置模板 | 只能逐件生成 | Phase 2 |
+| 5 | **前端未在真实 Electron 里跑过**：代码已完成（主进程、preload、sidecar 生命周期、视口组件、页面路由），但沙箱/无头环境无法创建 BrowserWindow，跨进程链路（sidecar 拉起、IPC、文件对话框）未实测 | 首次真机启动可能遇到路径/端口/权限问题 | M1：这是"骨架贯通"节点的验收内容；CI 环境可加 `xvfb-run`（Linux）或虚拟显示驱动（Windows）做自动化测试 |
+| 6 | **Electron 在无头/沙箱环境启动受限**：`--disable-gpu --disable-gpu-sandbox --no-sandbox` 仍不足以绕过无显示服务器的限制；GPU 进程反复崩溃后被 fatal | CI 无法做 Electron E2E；不影响真机使用 | M1：在带显示器的开发机上验证；CI 阶段用 Playwright + `--remote-debugging-port` 测渲染进程，或跳过 E2E 只做单元测试 |
+| 7 | **资产包批量（工作流 B）未实现**：Planner 与风格圣经只有配置模板 | 只能逐件生成 | Phase 2 |
 
