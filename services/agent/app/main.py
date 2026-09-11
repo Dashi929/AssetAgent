@@ -7,15 +7,17 @@ CORS 也只放行开发服务器和 Electron 壳，避免任何网页都能调�
 from __future__ import annotations
 
 import logging
+import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from . import __version__
 from .config import get_settings
 from .jobs import runner
-from .providers import registry
+from .providers import ProviderError, registry
 from .routers import ROUTERS
 
 logging.basicConfig(
@@ -63,6 +65,32 @@ app.add_middleware(
 
 for _router in ROUTERS:
     app.include_router(_router)
+
+
+# ------------------------------------------------------------------ 全局异常处理
+
+@app.exception_handler(ProviderError)
+async def _provider_error_handler(_request: Request, exc: ProviderError) -> JSONResponse:
+    """Provider 层的业务错误：消息是写给人看的，直接透给前端。"""
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(ValueError)
+async def _value_error_handler(_request: Request, exc: ValueError) -> JSONResponse:
+    """参数或数据错误：给前端一个明确的操作提示。"""
+    return JSONResponse(status_code=400, content={"detail": f"参数错误：{exc}"})
+
+
+@app.exception_handler(Exception)
+async def _catchall_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """未预期的内部错误：绝不能暴露堆栈给前端，但要留日志方便排查。"""
+    logger.error("未处理异常：%s\n%s", exc, traceback.format_exc())
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "内部错误，请稍后重试。如果反复出现，请在「设置 → 查看日志」中找到详细报错信息并反馈。"
+        },
+    )
 
 
 @app.get("/")

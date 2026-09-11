@@ -318,3 +318,79 @@ def test_budget_limit_blocks_generation(client):
     response = client.post(f"/api/assets/{asset_id}/generate", json={"num_variants": 1})
     assert response.status_code == 402, response.text
     assert "预算上限" in response.json()["detail"]
+
+
+# ------------------------------------------------------------------ 异常处理
+
+
+def test_provider_error_returns_400_without_stacktrace(client):
+    """ProviderError 必须返回 400，消息写人话，且绝不带堆栈。"""
+    from app.providers import ProviderError
+
+    # 临时制造一个会抛 ProviderError 的场景
+    def boom(*args, **kwargs):
+        raise ProviderError("这是一个人话错误")
+
+    from app import routers
+
+    original = routers.assets.run_pipeline
+    routers.assets.run_pipeline = boom
+    try:
+        response = client.post("/api/assets/nonexistent/pipeline", json={})
+        # run_pipeline 在调用前会先检查资产存在性，所以这里可能 404；
+        # 换一种方式：直接调一个会触发 ProviderError 的内部路径太麻烦，
+        # 不如直接测试 exception handler 的注册。
+        # 更简单：用一个已知会触发 ProviderError 的场景。
+        pass
+    finally:
+        routers.assets.run_pipeline = original
+
+    # 实际验证：直接通过 app 的 dependency_overrides 或手动调 handler 并不优雅。
+    # 改为测试「已知触发 ProviderError 的真实场景」： BYOK 模式 + 未配置 Key + 禁用 mock fallback
+    from app.config import reset_settings_cache
+    from app.providers import registry
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("ASSETAGENT_ALLOW_MOCK_FALLBACK", "false")
+    reset_settings_cache()
+    registry.reload()
+
+    upload = client.post(
+        "/api/assets/upload",
+        files=[("files", ("c.png", make_png_bytes(), "image/png"))],
+        data={"name": "SM_NoMock", "preset_key": "prop_default"},
+    ).json()
+    asset_id = upload["asset"]["id"]
+
+    response = client.post(f"/api/assets/{asset_id}/generate", json={"num_variants": 1})
+    assert response.status_code == 400, response.text
+    body = response.json()
+    assert "detail" in body
+    assert "traceback" not in str(body).lower()
+    assert "ProviderError" not in str(body)
+
+    monkeypatch.undo()
+    reset_settings_cache()
+    registry.reload()
+
+
+def test_unexpected_error_returns_500_without_stacktrace():
+    """未预期异常返回 500，给前端人话文案，日志里才有堆栈。
+
+    TestClient 默认会把服务端异常重新抛出来（方便调试），
+    所以这里直接调用 exception handler 验证行为。
+    """
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from app.main import _catchall_handler
+
+    request = MagicMock()
+    exc = RuntimeError("内部炸了")
+    response = asyncio.run(_catchall_handler(request, exc))
+    assert response.status_code == 500
+    body = response.body.decode()
+    assert "detail" in body
+    assert "traceback" not in body.lower()
+    assert "RuntimeError" not in body
+    assert "重试" in body or "反馈" in body
