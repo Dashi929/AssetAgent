@@ -68,3 +68,8 @@ Thumbs.db
 !samples/**/*.obj
 !samples/**/*.glb
 !samples/**/*.ply
+
+# 测试夹具是刻意入库的最小样例（见 services/agent/tests/fixtures/README.md）
+!services/agent/tests/fixtures/*.fbx
+!services/agent/tests/fixtures/*.glb
+!services/agent/tests/fixtures/*.obj
