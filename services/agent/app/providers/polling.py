@@ -15,7 +15,7 @@ import httpx
 from .base import ProviderError
 
 DONE_STATES = {"succeeded", "success", "done", "completed", "finished"}
-FAIL_STATES = {"failed", "failure", "error", "cancelled", "canceled", "expired"}
+FAIL_STATES = {"failed", "failure", "fail", "error", "cancelled", "canceled", "expired"}
 
 
 def dig(payload: Any, path: str, default: Any = None) -> Any:

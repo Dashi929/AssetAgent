@@ -1,11 +1,15 @@
 """Tripo Provider（云端 image/text-to-3D）。
 
-⚠️ 端点与字段以官方文档为准，**W1 需对照校正**。常量集中在下面。
+端点与字段已对照官方 Python SDK（2026-09-12，PyPI `tripo` 0.2.1 官方客户端）：
+- 基址 https://api.tripo3d.ai/v2/openapi；创建 POST /task，查询 GET /task/{id}
+- 鉴权 Bearer；响应 code != 0 即错误；data.task_id；status ∈ queued/running/succeeded/failed 等
+- 图片官方推荐先 POST /upload（multipart）拿 image_token，任务里传 file={type, file_token}
+- 产物在 data.output.{pbr_model, model, base_model}；model_version 合法值含 v2.5-20250123
+- 探活用 GET /user/balance（官方 SDK 的 get_balance）
 """
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 
 import httpx
@@ -16,6 +20,8 @@ from .polling import dig, download, poll_task
 # ---- 端点（改这里） ----
 CREATE_PATH = "/v2/openapi/task"
 QUERY_PATH = "/v2/openapi/task/{task_id}"
+UPLOAD_PATH = "/v2/openapi/upload"
+BALANCE_PATH = "/v2/openapi/user/balance"
 MODEL_VERSION = "v2.5-20250123"
 
 POLL_INTERVAL = 5.0
@@ -26,25 +32,45 @@ class TripoProvider(Gen3DProvider):
     name = "tripo"
     display_name = "Tripo"
     capabilities = ("image_to_3d", "text_to_3d", "pbr_texture")
-    note = "接入简单，适合作为 Meshy 的对照。端点需 W1 对照官方文档校正。"
+    note = "接入简单，适合作为 Meshy 的对照。端点已对照官方文档校正（2026-09-12）。"
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._require_key()}"}
 
-    def _payload(self, req: GenerateRequest, image: Path | None) -> dict:
-        if image is not None:
-            encoded = base64.b64encode(image.read_bytes()).decode("ascii")
-            suffix = image.suffix.lstrip(".").lower() or "png"
+    def _payload(self, req: GenerateRequest, file_token: tuple[str, str] | None) -> dict:
+        if file_token is not None:
+            file_type, token = file_token
             return {
                 "type": "image_to_model",
                 "model_version": MODEL_VERSION,
-                "file": {"type": suffix, "data": encoded},
+                "pbr": True,
+                "file": {"type": file_type, "file_token": token},
             }
         return {
             "type": "text_to_model",
             "model_version": MODEL_VERSION,
+            "pbr": True,
             "prompt": req.prompt,
         }
+
+    async def _upload_image(self, client: httpx.AsyncClient, image: Path) -> tuple[str, str]:
+        """先传图拿 file_token —— 官方 SDK 的标准流程，比 base64 内嵌稳。"""
+        suffix = image.suffix.lstrip(".").lower() or "png"
+        with image.open("rb") as fh:
+            response = await client.post(
+                UPLOAD_PATH, headers=self._headers(), files={"file": (image.name, fh)}
+            )
+        if response.status_code >= 400:
+            raise ProviderError(
+                f"Tripo 上传参考图失败（HTTP {response.status_code}）：{response.text[:200]}"
+            )
+        body = response.json()
+        if dig(body, "code", 0) not in (0, None):
+            raise ProviderError(f"Tripo 上传失败：{dig(body, 'message') or response.text[:200]}")
+        token = dig(body, "data.image_token")
+        if not token:
+            raise ProviderError(f"Tripo 上传成功但未返回 image_token：{response.text[:200]}")
+        return suffix, str(token)
 
     async def generate(self, req: GenerateRequest) -> list[VariantResult]:
         headers = self._headers()
@@ -58,7 +84,8 @@ class TripoProvider(Gen3DProvider):
                 image = images[index % len(images)] if images else None
                 req.report(index / max(1, req.num_variants) * 0.5, f"提交变体 {index + 1}…")
 
-                created = await client.post(CREATE_PATH, headers=headers, json=self._payload(req, image))
+                file_token = await self._upload_image(client, image) if image is not None else None
+                created = await client.post(CREATE_PATH, headers=headers, json=self._payload(req, file_token))
                 if created.status_code >= 400:
                     raise ProviderError(
                         f"Tripo 提交任务失败（HTTP {created.status_code}）：{created.text[:200]}"
@@ -121,9 +148,8 @@ class TripoProvider(Gen3DProvider):
             return False
         try:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=15.0) as client:
-                response = await client.get(
-                    QUERY_PATH.format(task_id="healthcheck"), headers=self._headers()
-                )
+                # 官方余额接口：Key 有效必 200；401/403 = Key 无效
+                response = await client.get(BALANCE_PATH, headers=self._headers())
             return response.status_code not in (401, 403)
         except httpx.HTTPError:
             return False

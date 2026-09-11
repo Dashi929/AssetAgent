@@ -1,7 +1,12 @@
 """Meshy Provider（云端 image/text-to-3D）。
 
-⚠️ 端点与字段以官方文档为准。**W1 需要对照官方文档校正一次**，所以把它们集中放在
-下面的常量区，改的时候只改这一处。校正前不要在正式环境依赖它。
+端点与字段已对照官方 OpenAPI（2026-09-12，经 tryAGI/Meshy 生成 SDK 核对，
+其源即 Meshy 官方 openapi 规范）：
+- 创建 POST /openapi/v1/{image,text}-to-3d，响应 {"result": task_id}
+- 查询 GET /openapi/v1/{kind}/{task_id}，status ∈ PENDING/IN_PROGRESS/SUCCEEDED/FAILED/CANCELED
+- 产物在 model_urls.{glb,fbl,fbx,usdz,objc}；字段 image_url / ai_model /
+  topology / target_polycount / should_remesh / enable_pbr 全部有效
+- ai_model 可选值：meshy-5 / meshy-6 / latest（meshy-4 已下架）
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from .polling import dig, download, poll_task
 IMAGE_TO_3D_PATH = "/openapi/v1/image-to-3d"
 TEXT_TO_3D_PATH = "/openapi/v1/text-to-3d"
 TASK_PATH = "/openapi/v1/{kind}/{task_id}"
-AI_MODEL = "meshy-4"
+AI_MODEL = "meshy-5"
 
 POLL_INTERVAL = 5.0
 POLL_TIMEOUT = 900.0
@@ -27,7 +32,7 @@ class MeshyProvider(Gen3DProvider):
     name = "meshy"
     display_name = "Meshy"
     capabilities = ("image_to_3d", "text_to_3d", "pbr_texture", "remesh")
-    note = "API 最全的一家，MVP 首选。端点需 W1 对照官方文档校正。"
+    note = "API 最全的一家，MVP 首选。端点已对照官方文档校正（2026-09-12）。"
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._require_key()}"}

@@ -3,10 +3,10 @@
 腾讯云「混元生3D」（产品代码 ai3d）是三家人可自由选用（Meshy / Tripo / 混元3D，
 2026-09-11 拍板，见产品策划文档 12）里的国产选项：国内访问稳定、按量计费人民币结算。
 
-⚠️ 端点与字段以官方文档为准，**W1 需对照校正**（产品 1804：
-https://cloud.tencent.com/document/product/1804）。已从官方文档核对到的：
-动作名为 QueryHunyuanTo3DRapidJob / SubmitHunyuanTo3DProToJob 系列；
-其余常量集中在下面。
+⚠️ 已对照官方 SDK 校正（2026-09-12，TencentCloud/tencentcloud-sdk-python
+`ai3d/v20250513` 模块）：动作名 SubmitHunyuanTo3DRapidJob / QueryHunyuanTo3DRapidJob、
+版本号 2025-05-13、字段 EnablePBR / FaceCount / ResultFile3Ds 均按官方 models.py 核对。
+产品文档：https://cloud.tencent.com/document/product/1804
 
 与 Meshy/Tripo 的两点不同：
 
@@ -34,29 +34,51 @@ import httpx
 from .base import Gen3DProvider, GenerateRequest, ProviderError, VariantResult
 from .polling import DONE_STATES, FAIL_STATES, dig, download
 
-# ---- 端点与动作（改这里；W1 对照官方文档校正） ----
+# ---- 端点与动作（已对照官方 SDK 腾讯云 ai3d v20250513 校正，2026-09-12） ----
 DEFAULT_HOST = "ai3d.tencentcloudapi.com"
 SERVICE = "ai3d"
-API_VERSION = "2025-01-01"  # ⚠️ W1：以官方文档「X-TC-Version」为准
-SUBMIT_ACTION = "SubmitHunyuanTo3DRapidJob"  # ⚠️ W1：极速版提交；专业版换 Pro 系列
-QUERY_ACTION = "QueryHunyuanTo3DRapidJob"  # 已见于官方文档 API 概览
+API_VERSION = "2025-05-13"
+SUBMIT_ACTION = "SubmitHunyuanTo3DRapidJob"
+QUERY_ACTION = "QueryHunyuanTo3DRapidJob"
 
-# 请求/响应字段（⚠️ W1 对照 API Explorer 校正）
+# 请求/响应字段（官方 models.py 核对）：
+# 提交：Prompt / ImageBase64 / ImageUrl / EnablePBR / FaceCount(3000–1500000)
+# 查询响应：Status(WAIT/RUN/FAIL/DONE) + ResultFile3Ds[{Type,Url,PreviewImageUrl}]
 JOB_ID_FIELD = "JobId"
 IMAGE_FIELD = "ImageBase64"
 PROMPT_FIELD = "Prompt"
 OUTPUT_URL_PATHS = (
+    "Response.ResultFile3Ds.0.Url",  # 官方字段；GLB 优先由 _pick_model_url 处理
     "Response.OutputFileUrl",
     "Response.Output.FileUrl",
     "Response.ResultFileUrl",
     "Response.FileUrl",
 )
-# 腾讯的任务状态枚举与别家不同（疑似 Done/Running/Failed），两边别名都收下
+# 腾讯状态枚举：WAIT / RUN / FAIL / DONE
 LOCAL_DONE_STATES = DONE_STATES | {"done"}
-LOCAL_FAIL_STATES = FAIL_STATES | {"jobfailed"}
+LOCAL_FAIL_STATES = FAIL_STATES | {"fail"}
 
 POLL_INTERVAL = 5.0
 POLL_TIMEOUT = 900.0
+
+
+def _pick_model_url(state: dict) -> str:
+    """官方响应里产物在 ResultFile3Ds 列表（obj+glb 双份），优先挑 GLB。"""
+    files = dig(state, "Response.ResultFile3Ds") or []
+    if isinstance(files, list) and files:
+        by_type = {
+            str(entry.get("Type") or "").lower(): entry.get("Url")
+            for entry in files
+            if isinstance(entry, dict)
+        }
+        for kind in ("glb", "gltf", "fbx", "obj"):
+            if by_type.get(kind):
+                return str(by_type[kind])
+        return next((str(u) for u in by_type.values() if u), "")
+    for path in OUTPUT_URL_PATHS:  # 兼容旧字段
+        if url := dig(state, path):
+            return str(url)
+    return ""
 
 
 def split_credentials(raw: str) -> tuple[str, str]:
@@ -74,7 +96,7 @@ class Hunyuan3DProvider(Gen3DProvider):
     name = "hunyuan3d"
     display_name = "混元3D"
     capabilities = ("image_to_3d", "text_to_3d", "pbr_texture")
-    note = "腾讯云混元生3D。凭据填 SecretId:SecretKey（冒号分隔）。端点待 W1 对照官方文档校正。"
+    note = "腾讯云混元生3D。凭据填 SecretId:SecretKey（冒号分隔）。端点已对照官方 SDK 校正（2026-09-12）。"
 
     # ---- TC3 签名（算法为腾讯云公共约定，相对可靠；动作名/版本号才是 W1 重点） ----
     def _tc3_headers(self, action: str, payload: str) -> dict[str, str]:
@@ -148,11 +170,15 @@ class Hunyuan3DProvider(Gen3DProvider):
                 image = images[index % len(images)] if images else None
                 req.report(index / max(1, req.num_variants) * 0.5, f"提交变体 {index + 1}…")
 
-                submit_params: dict = {}
+                submit_params: dict = {"EnablePBR": True}
                 if image is not None:
                     submit_params[IMAGE_FIELD] = base64.b64encode(image.read_bytes()).decode("ascii")
                 else:
                     submit_params[PROMPT_FIELD] = req.prompt
+                face_budget = (req.spec.face_budget if req.spec else 0) or 0
+                if face_budget:
+                    # 官方面数范围 3000–1500000，低预算夹到下限
+                    submit_params["FaceCount"] = max(3000, min(1_500_000, int(face_budget)))
 
                 created = await self._post_action(client, SUBMIT_ACTION, submit_params)
                 job_id = dig(created, f"Response.{JOB_ID_FIELD}")
@@ -160,7 +186,7 @@ class Hunyuan3DProvider(Gen3DProvider):
                     raise ProviderError(f"混元3D 未返回任务 ID：{created}")
 
                 state = await self._poll(client, job_id, req, index)
-                url = next((u for p in OUTPUT_URL_PATHS if (u := dig(state, p))), "")
+                url = _pick_model_url(state)
                 if not url:
                     raise ProviderError("混元3D 任务完成但没有返回模型下载地址。")
 

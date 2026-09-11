@@ -49,7 +49,8 @@ class Settings(BaseSettings):
 
     meshy_base_url: str = "https://api.meshy.ai"
     tripo_base_url: str = "https://api.tripo3d.ai"
-    rodin_base_url: str = "https://api.hyper3d.com"
+    # 官方 v2 API 在 hyperhuman.deemos.com（DeemosTech 官方客户端核对，2026-09-12）
+    rodin_base_url: str = "https://hyperhuman.deemos.com"
     hunyuan3d_base_url: str = "https://ai3d.tencentcloudapi.com"
 
     # ---- 成本 ----
