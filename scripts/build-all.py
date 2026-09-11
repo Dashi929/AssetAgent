@@ -179,6 +179,12 @@ def build_sidecar(python: Path) -> Path:
     else:
         print(f"⚠ 未找到 {ufbx_tool}，打包出的应用 FBX 导入将回退到 Blender")
 
+    # VC++ 运行时：wheel 自带的老版 msvcp140 会全局遮蔽系统新版，xatlas 段错误
+    # （详见 build-sidecar-only.py 同段注释与 HANDOFF 第十二轮）
+    system_msvcp = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "MSVCP140.dll"
+    if system_msvcp.is_file():
+        cmd.append(f"--add-binary={system_msvcp}{os.pathsep}.")
+
     cmd.append(str(entry))
 
     # cwd 设到 services/agent/ —— PyInstaller 在这里分析 app/ 包

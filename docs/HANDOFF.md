@@ -11,6 +11,33 @@
 
 ---
 
+## 2026-09-11 第十二轮：FBX 导入闪退根因修复 —— 双凶手（CSP 拦 WASM + 老版 VC 运行时段错误）
+
+### 改动摘要
+用户复测 FBX 导入，"连不上 + 闪退"复现，**三路日志完整记录了全过程**，一次定位两个独立根因：
+
+1. **渲染进程**：`WebAssembly.instantiate(): Refused to compile ... 'unsafe-eval' ... script-src 'self'` —— CSP 不允许编译 WASM，视口加载 GLB 时 three.js 的 WASM 解码器被拦，Uncaught 异常。
+2. **sidecar 进程**：退出码 3221225477（0xC0000005）。Windows 事件日志给出故障模块：`_MEI*/MSVCP140.dll 版本 14.16`——**fast_simplification / numpy 的 wheel 自带 2019 年的 VC 运行时**，PyInstaller 打包后全局遮蔽系统新版（14.5x），管线 uv 步 xatlas 一调新版 CRT 功能就段错误。开发环境正常（用系统运行时）所以冒烟测试从未暴露。
+
+时序：导入成功 → 管线跑到 uv 步 → sidecar 段错误死亡 → 前端 fetch 全挂（"连不上"）→ 视口 WASM 也被 CSP 拦（错误铺满）。
+
+### 修复
+
+| 文件 | 变更 |
+|---|---|
+| `apps/desktop/index.html` | CSP `script-src` 加 `'wasm-unsafe-eval'`（Electron + three.js WASM 解码器的标准配置） |
+| `scripts/build-sidecar-only.py` / `build-all.py` | PyInstaller 显式 `--add-binary` 系统 `System32\MSVCP140.dll` 覆盖 wheel 自带的老版（MSVCP140 向后兼容，新版运行旧构建只赚不亏） |
+
+### 排障过程（方法论沉淀）
+日志就位后一轮定位：main.log 抓到 WASM CSP 异常 + sidecar 退出码；事件日志给出故障模块与版本号；用打包版 sidecar + curl 复现（import → pipeline → 死），修复后同路径验证通过。**"开发正常、打包崩"优先怀疑 PyInstaller 打进去的陈旧二进制遮蔽系统组件。**
+
+### 验证状态
+- 打包版 sidecar 完整复现通过：import → repair → decimate → **uv（原崩溃点）** → bake 全部完成，job succeeded，进程存活
+- 便携版重建并打开：界面数据请求正常、sidecar 健康
+- 待用户复测：拖 FBX 应完整走通管线（uv 不再崩），视口加载 GLB 不再有 WASM 报错
+
+---
+
 ## 2026-09-11 第十一轮：修复陈旧错误横幅 —— 就绪后自动恢复
 
 ### 改动摘要
@@ -435,7 +462,7 @@ npx electron-builder --win nsis
 | # | 问题 | 影响 | 认领节点 | 备注 |
 |---|---|---|---|---|
 | 9 | **console-message 钩子在 Electron 32 新事件签名下失效**：level 参数不再是数字，渲染进程的 console 报错实际没被记录进 main.log | 排障时少一路证据 | M5 | 改用事件对象签名（event.level），兼容两种签名 |
-| 8 | **拖 FBX 后闪退，根因未定位**：导入本身成功（GLB 健康），管线 60% 时三进程全灭；怀疑渲染/GPU 进程崩溃连锁退出，或拖拽导航（第九轮已阻断） | 用户无法导入 FBX | **第九轮日志已就位，等复测** | 复测后读 `%LOCALAPPDATA%\AssetAgent\logs\` 三份日志定位 |
+| 8 | ~~**拖 FBX 后闪退，根因未定位**~~ **已修复（第十二轮）**：① CSP 拦 WASM → 加 `'wasm-unsafe-eval'`；② wheel 自带的老版 MSVCP140 遮蔽系统运行时致 xatlas 段错误 → 打包时覆盖系统版本。frozen 环境完整管线验证通过 | ~~用户无法导入 FBX~~ 已解决 | ✅ 第十二轮 | 视口交互仍待用户实测 |
 | 1 | **UV 展开无法保证零重叠**：xatlas Python 绑定不暴露 padding，实测约 0.04% 面有微小重叠 | 校验器的 UV 重叠规则暂时按 WARN 报 | M3 | 需换 Blender Smart UV Project 或补去重叠后处理 |
 | 2 | **四边面重拓扑未实现**：`want_quads` 只被记录，实际输出仍是三角面 | 四边面规则默认关闭 | W2 末 Spike | 决定是否真做（见 5.4.3） |
 | 3 | **云 Provider 端点未对照官方文档校正**：Meshy/Tripo/Rodin/混元3D 的 endpoint 是按下标写的（混元3D 的 TC3 签名是公共算法，动作名与 API 版号需重点核对） | 首次真实调用可能失败 | W1 | 端点集中在各 provider 文件顶部常量区 |

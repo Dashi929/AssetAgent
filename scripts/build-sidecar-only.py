@@ -71,6 +71,19 @@ if ufbx_tool.is_file():
 else:
     print(f"⚠ 未找到 {ufbx_tool}，打包出的应用 FBX 导入将回退到 Blender")
 
+# VC++ 运行时：fast_simplification / numpy 的 wheel 自带 2019 年的 msvcp140（14.16），
+# PyInstaller 会把它打进包并**全局遮蔽**系统的新版（14.5x），xatlas 一调新版 CRT
+# 功能就 0xC0000005 段错误（管线 uv 步必崩，Windows 事件日志的故障模块是
+# _MEI*/MSVCP140.dll）。这里显式塞入系统版本覆盖。MSVCP140 向后兼容，
+# 新版运行旧构建只赚不亏。见 HANDOFF 第十二轮。
+import os  # noqa: E402
+
+system_msvcp = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "MSVCP140.dll"
+if system_msvcp.is_file():
+    cmd.append(f"--add-binary={system_msvcp};.")
+else:
+    print("⚠ 找不到系统 MSVCP140.dll，wheel 自带的老版运行时可能导致管线段错误")
+
 cmd.append(str(entry))
 
 print(">> PyInstaller sidecar ...")
