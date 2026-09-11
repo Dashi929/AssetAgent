@@ -3,9 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      CSP 说明：
+      - sidecar 端口是**动态**的（8756 起，冲突时上浮），所以这里用 `http://127.0.0.1:*`
+        而不是写死端口。写死会导致端口上浮后所有 API 调用与图片被静默拦掉。
+      - ws:// 只放行 Vite 的 HMR；打包后不会用到。
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://127.0.0.1:8756; connect-src 'self' http://127.0.0.1:8756 ws://127.0.0.1:5173; worker-src 'self' blob:;"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:5173; worker-src 'self' blob:; object-src 'none'; base-uri 'self';"
     />
     <title>AssetAgent</title>
   </head>

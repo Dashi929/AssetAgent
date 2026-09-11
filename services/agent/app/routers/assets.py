@@ -211,7 +211,9 @@ async def generate_variants(asset_id: str, body: GenerateBody) -> dict[str, Any]
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     num_variants = max(1, min(6, body.num_variants))
-    estimate = registry.estimate_cost(num_variants)
+    # 预估走已解析 Provider 自己的算法：离线占位与本地模型都无边际成本，
+    # 用全局单价 × 次数会给用户报一个不存在的价格。
+    estimate = provider.estimate_cost(num_variants, settings.cost_per_generation)
     if settings.budget_exceeded(estimate):
         raise HTTPException(
             status_code=402,
@@ -223,7 +225,9 @@ async def generate_variants(asset_id: str, body: GenerateBody) -> dict[str, Any]
         )
 
     images = _image_sources(asset)
-    if not images and not (body.prompt or asset.prompt).strip() and provider.name != "mock":
+    # 既没有参考图也没有文字描述时，生成是没有依据的 —— 不管走哪家 Provider 都该拦下，
+    # 而不是把一个空请求丢给 Provider 去炸（错误信息会难懂得多）。
+    if not images and not (body.prompt or asset.prompt).strip():
         raise HTTPException(
             status_code=400,
             detail="这个资产还没有概念图，也没有文字描述，无法生成。请先上传参考图或填写描述。",

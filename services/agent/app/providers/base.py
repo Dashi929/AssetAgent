@@ -94,9 +94,13 @@ class Gen3DProvider(ABC):
     async def generate(self, req: GenerateRequest) -> list[VariantResult]:
         """生成 num_variants 个变体。失败必须抛 ProviderError，不要返回空列表。"""
 
-    def estimate_cost(self, req: GenerateRequest, unit_cost: float) -> float:
-        """默认按"次数 × 单价"估。有特殊计费的 Provider 覆盖它。"""
-        return round(unit_cost * max(1, req.num_variants), 4)
+    def estimate_cost(self, num_variants: int, unit_cost: float) -> float:
+        """生成前预估本次花费（对应 5.3「成本可见」）。
+
+        默认按"次数 × 单价"估。没有边际成本的 Provider（mock / 本地模型）
+        必须覆盖它返回 0 —— 否则界面会给美术报一个不存在的价格。
+        """
+        return round(unit_cost * max(1, num_variants), 4)
 
     async def healthcheck(self) -> bool:
         """连通性自检 —— 设置页那个"测试连接"按钮调的就是它。"""

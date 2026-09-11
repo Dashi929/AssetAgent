@@ -105,8 +105,8 @@ class MockProvider(Gen3DProvider):
             )
         return results
 
-    def estimate_cost(self, req: GenerateRequest, unit_cost: float) -> float:
-        return 0.0
+    def estimate_cost(self, num_variants: int, unit_cost: float) -> float:
+        return 0.0  # 离线占位不产生任何费用，界面必须如实显示 ¥0
 
     async def healthcheck(self) -> bool:
         return True

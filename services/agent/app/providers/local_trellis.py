@@ -29,7 +29,7 @@ class LocalTrellisProvider(Gen3DProvider):
     async def generate(self, req: GenerateRequest) -> list[VariantResult]:
         raise ProviderError(PHASE2_MESSAGE)
 
-    def estimate_cost(self, req: GenerateRequest, unit_cost: float) -> float:
+    def estimate_cost(self, num_variants: int, unit_cost: float) -> float:
         return 0.0  # 本地推理无边际成本，只有电费
 
     async def healthcheck(self) -> bool:

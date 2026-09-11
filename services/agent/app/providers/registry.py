@@ -25,9 +25,21 @@ PRIORITY = ("meshy", "tripo", "rodin")
 
 class ProviderRegistry:
     def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings or get_settings()
+        # 只在显式传入时才固定 Settings（测试用）；否则每次现取
+        self._explicit_settings = settings
         self._providers: dict[str, Gen3DProvider] = {}
         self.reload()
+
+    @property
+    def settings(self) -> Settings:
+        """每次访问都取当前 Settings。
+
+        曾经把 Settings 缓存在实例上，结果 `reset_settings_cache()` 之后 registry
+        还在读旧实例 —— 用户填了 API Key，`has_key` 却仍是 False，界面显示"未配置"，
+        生成一直走占位模式。这种"配置改了但不生效"是最难排查的一类 bug，
+        所以这里刻意不做缓存。
+        """
+        return self._explicit_settings or get_settings()
 
     def _build(self) -> dict[str, Gen3DProvider]:
         settings = self.settings
@@ -93,9 +105,14 @@ class ProviderRegistry:
             "如果只是想先跑通后处理链路，可以打开「允许离线占位模式」。"
         )
 
-    def estimate_cost(self, num_variants: int) -> float:
-        """生成前预估本次花费 —— 对应 5.3「成本可见」。"""
-        return round(self.settings.cost_per_generation * max(1, num_variants), 4)
+    def estimate_cost(self, num_variants: int, provider_name: str | None = None) -> float:
+        """生成前预估本次花费。
+
+        走**已解析的 Provider** 自己的算法，而不是全局单价 × 次数：
+        否则离线占位模式会给用户报一个 ¥5 的假价格，本地模型同理。
+        """
+        provider = self.resolve(provider_name)
+        return provider.estimate_cost(num_variants, self.settings.cost_per_generation)
 
 
 registry = ProviderRegistry()
