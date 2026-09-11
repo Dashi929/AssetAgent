@@ -10,6 +10,39 @@
 
 ---
 
+## 2026-09-11 第六轮：打包模式路径解析 + 应用图标
+
+### 改动摘要
+解决打包后 sidecar 的路径解析问题：新增 `app/paths.py` 统一开发/打包双模式的路径推导；**数据目录从安装目录迁到系统应用数据目录**（卸载不再带走用户资产）；recipes 优先读安装目录（用户可编辑）而非 exe 内的冻结快照；补上应用图标。
+
+### 详细变更
+
+| 文件 | 变更 |
+|---|---|
+| `services/agent/app/paths.py` | 新增。`app_root()` / `resource_dir()` / `find_recipes_dir()` / `default_data_dir()` + `FROZEN` 常量。文件头记录三个坑位（_MEIPASS 临时解压、数据目录不能落安装目录、冻结快照不能优先用） |
+| `services/agent/app/config.py` | `REPO_ROOT` 改由 `paths.app_root()` 提供（打包后= resources/）；`data_dir` 默认值改 `default_data_dir()`；`recipes_dir` 改 `find_recipes_dir()` |
+| `services/agent/sidecar_entry.py` | 打包时把 `_MEIPASS` 插到 sys.path 头部（必须在任何 `app.*` 导入之前）；**移除**强制 `ASSETAGENT_DATA_DIR=exe同级/data`；启动时打印数据/规则目录，真机排障第一眼可核对；补充"入口必须与 app/ 同级，否则 PyInstaller 静默产出空壳 exe"的坑位说明 |
+| `scripts/build-sidecar-only.py` | `shutil.rmtree` 换成 `force_remove()`（cmd rmdir 强删，绕过沙箱回收站删除失败问题）；hidden-import 增加 `app.paths`；`subprocess.run` 补显式 `check=False`（ruff PLW1510） |
+| `services/agent/tests/test_paths.py` | 新增 9 个测试：双模式数据目录、env 优先级、**打包后数据目录不在安装目录下**、app_root=resources、recipes 三级回落（安装目录 > _MEIPASS > 理论路径）、开发模式 recipes 真实存在 |
+| `apps/desktop/package.json` | `build.directories.buildResources=build-resources`；`build.win.icon=build-resources/icon.ico` |
+| `apps/desktop/build-resources/icon.ico` | 新增。应用图标（16–256 共 7 个尺寸的多分辨率 ICO） |
+| `scripts/make-icon.py` | 新增。图标生成脚本（PIL 绘制深青底 + 白色等距立方体），改设计后重跑即可再生成 |
+
+### 关键设计决策
+
+1. **数据目录迁出安装目录**。之前 sidecar_entry 强制把数据放在 exe 同级 `data/`，即安装目录内 → 用户卸载时资产一起被删。现在打包后固定 `%LOCALAPPDATA%\AssetAgent`（macOS/Linux 同理），`ASSETAGENT_DATA_DIR` 环境变量仍可覆盖，开发模式仍是仓库 `.data/`。
+2. **recipes 优先安装目录而非 _MEIPASS**。PyInstaller `--add-data` 在 exe 内塞了规则快照，但 onefile 每次启动换临时目录（路径不稳定），且那份用户改不动。recipes 是给技术美术编辑的配置，必须命中安装目录 `resources/recipes`；exe 被单独拷走时才回退内部快照。
+3. **PyInstaller 入口文件必须与 app/ 包同级**（`services/agent/` 下）。放 scripts/ 时静态分析找不到 app 包会**静默**忽略整个包，产出一个能启动但一调用就 ModuleNotFoundError 的空壳 exe —— 体积异常小是唯一信号。
+
+### 验证状态
+- `pytest tests`：**44 passed**（原 35 + 新增 9 个路径测试）
+- `ruff check`（app / tests / sidecar_entry / 两个 build 脚本）：All checks passed
+- `python -m app.smoke`：全链路跑通，校验通过（6 PASS / 1 WARN / 2 SKIP）
+- `package.json` JSON 校验通过；`icon.ico` 为合法多尺寸 Windows 图标资源
+- **尚未验证**：`sidecar-dist/` 里的 exe 还是第五轮旧代码打的 —— 需重跑 `python scripts/build-sidecar-only.py` 重新打包，并真机确认数据目录落到 `%LOCALAPPDATA%\AssetAgent`
+
+---
+
 ## 2026-09-11 第五轮：修复打包阻塞 + 应用瘦身
 
 ### 改动摘要
@@ -295,6 +328,7 @@ npm run build       # Vite 生产构建
 ## 下一步（按优先级）
 
 1. **W0 前置**：团队规模（8 周 / 12 周口径）—— 需用户拍板
-2. **W1 必做**：拿到 API Key 后对照官方文档校正 Meshy/Tripo/Rodin 端点
-3. **M1 验收**：在带显示器的开发机上启动 Electron，验证跨进程链路
-4. **M3 认领**：UV 零重叠方案、Blender 脚本实机校正
+2. **重打包验证**：第六轮路径代码只过了单测，`sidecar-dist/` 里的 exe 还是旧代码 —— 重跑 `python scripts/build-sidecar-only.py` + electron-builder，真机确认数据目录落到 `%LOCALAPPDATA%\AssetAgent`
+3. **W1 必做**：拿到 API Key 后对照官方文档校正 Meshy/Tripo/Rodin 端点
+4. **M1 验收**：在带显示器的开发机上启动 Electron，验证跨进程链路
+5. **M3 认领**：UV 零重叠方案、Blender 脚本实机校正

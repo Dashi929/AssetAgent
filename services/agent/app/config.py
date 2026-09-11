@@ -16,8 +16,10 @@ from typing import Any, Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# services/agent/app/config.py -> 仓库根
-REPO_ROOT = Path(__file__).resolve().parents[3]
+from app.paths import app_root, default_data_dir, find_recipes_dir
+
+# services/agent/app/config.py -> 仓库根（开发时）；打包后解析为 resources/ 目录
+REPO_ROOT = app_root()
 
 RouteMode = Literal["byok", "relay"]
 
@@ -59,7 +61,7 @@ class Settings(BaseSettings):
     @property
     def data_dir(self) -> Path:
         raw = self.assetagent_data_dir.strip()
-        base = Path(raw).expanduser() if raw else REPO_ROOT / ".data"
+        base = Path(raw).expanduser() if raw else default_data_dir()
         base.mkdir(parents=True, exist_ok=True)
         return base
 
@@ -91,7 +93,8 @@ class Settings(BaseSettings):
 
     @property
     def recipes_dir(self) -> Path:
-        return REPO_ROOT / "recipes"
+        """校验规则与预设目录。打包后从 resources/recipes 读取。"""
+        return find_recipes_dir()
 
     # ---- BYOK ----
     def provider_key(self, provider: str) -> str:

@@ -45,7 +45,8 @@
     "appId": "cn.nitehome.assetagent",
     "productName": "AssetAgent",
     "directories": {
-      "output": "build"
+      "output": "build",
+      "buildResources": "build-resources"
     },
     "files": [
       "dist/**/*",
@@ -85,7 +86,8 @@
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "build-resources/icon.ico"
     }
   }
 }
