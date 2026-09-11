@@ -45,12 +45,17 @@
     "appId": "cn.nitehome.assetagent",
     "productName": "AssetAgent",
     "directories": {
-      "output": "release"
+      "output": "build"
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "package.json",
+      "!**/*.map",
+      "!node_modules/**/*"
     ],
+    "npmRebuild": false,
+    "asar": true,
     "extraResources": [
       {
         "from": "sidecar-dist",
@@ -62,7 +67,14 @@
         "filter": [
           "**/*.py",
           "!**/__pycache__/**",
-          "!**/tests/**"
+          "!**/tests/**",
+          "!**/.venv/**",
+          "!**/venv/**",
+          "!**/.pytest_cache/**",
+          "!**/.ruff_cache/**",
+          "!**/*.egg-info/**",
+          "!**/sidecar-build/**",
+          "!**/sidecar-dist/**"
         ]
       },
       {

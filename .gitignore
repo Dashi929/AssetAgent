@@ -11,6 +11,10 @@ release/
 sidecar-build/
 sidecar-dist/
 
+# ---- electron-builder 输出（NSIS 安装包 + win-unpacked，体积数百 MB）----
+apps/desktop/build/
+apps/desktop/release/
+
 # ---- Python ----
 __pycache__/
 *.py[cod]

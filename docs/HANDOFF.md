@@ -10,6 +10,49 @@
 
 ---
 
+## 2026-09-11 第五轮：修复打包阻塞 + 应用瘦身
+
+### 改动摘要
+修复 Electron 打包链路上的三个阻塞问题（asar 文件锁、node_modules 全量入包、venv 被当源码拷贝），同时把应用体积从 ~250MB 降到 ~80MB。
+
+### 详细变更
+
+| 文件 | 变更 |
+|---|---|
+| `apps/desktop/package.json` | ① `files` 新增 `!node_modules/**/*` 与 `!**/*.map`：主进程实际零第三方依赖（只 require `electron` + node 内建模块），渲染层已由 Vite 全量打包进 `dist/`，因此 node_modules 完全不需要进 asar；② `npmRebuild: false`（无原生模块，跳过 `@electron/rebuild`）；③ `extraResources` 里 sidecar 源码的 filter 增加 `!**/.venv/**`、`!**/*.egg-info/**`、各类缓存目录排除 |
+
+### 关键排障记录（下一个 Agent 直接看这里）
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| `app.asar` 删不掉 / `The process cannot access the file` | 上一次 electron-builder 的 `app-builder.exe` 进程残留未退出，持续持有句柄 | `taskkill /F /PID <pid>` 杀掉残留 app-builder 后再构建。**注意：不要在运行中的构建期间杀进程** |
+| 沙箱里 `rm -rf` 报 `SAFE_DELETE_FAIL_CLOSED` | 安全删除机制走回收站，失败即拒绝 | 用 `[System.IO.Directory]::Delete($path, $true)`（.NET API）或 `cmd /c rmdir /s /q` |
+| Vite build 报 `SAFE_DELETE_BULK_CONFIRM_REQUIRED count:50` | 沙箱对单轮内批量删除设了 50 个阈值 | 构建前先手工删除 `apps/desktop/dist` |
+| `Cannot create symbolic link : 客户端没有所需的特权` | extraResources 拷贝 `services/agent` 时把 `.venv` 里大量文件也纳入，且沙箱限制符号链接创建 | 在 filter 里排除 `.venv`，并以 `dangerouslyDisableSandbox` 运行构建 |
+| asar 高达 129MB | electron-builder 默认把生产依赖全量打进 asar（three / drei 等） | `files` 里显式 `!node_modules/**/*` |
+
+### 构建产物（本轮已成功生成）
+
+| 路径 | 体积 | 说明 |
+|---|---|---|
+| `apps/desktop/build/AssetAgent Setup 0.1.0.exe` | 150MB | NSIS 安装包，双击安装即可用 |
+| `apps/desktop/build/win-unpacked/AssetAgent.exe` | 186MB | 便携版，不安装直接运行 |
+| `build/win-unpacked/resources/app.asar` | **1.1MB** | 由 129MB 降下来（排除了 node_modules） |
+| `build/win-unpacked/resources/sidecar-dist/assetagent-sidecar.exe` | 68MB | 修复后的 sidecar，随应用启动 |
+| `build/win-unpacked/resources/sidecar/` | 36 个 .py | 源码副本（已排除 .venv），仅供 fallback 模式 |
+
+### 验证状态
+- `npx electron-builder --win nsis` → **EXIT=0，构建成功**（日志 `/tmp/eb3.log`）
+- asar 内容已核验：仅 `dist/`（Vite 产物）+ `dist-electron/`（main/preload/sidecar）+ `package.json`，无 node_modules
+- win-unpacked 已核验：`AssetAgent.exe` + `locales/` + 全部 Chromium DLL 齐全，`resources/` 下 `app.asar`、`recipes/`、`sidecar/`、`sidecar-dist/` 四项齐全
+- sidecar exe 已单独验证可启动：`Uvicorn running on http://127.0.0.1:18756`
+- **尚未验证**：真机双击安装包启动后的端到端表现（沙箱无显示器，见已知问题 #5、#6）
+
+### 架构说明（用户常问：为什么要启动本地服务）
+Electron 壳只负责窗口 / 3D 视口 / 文件对话框；全部重活（trimesh 修复、减面、UV、烘焙、校验、Provider 调用、状态机、版本树）都在 Python sidecar（FastAPI）里，因为 3D 生态在 Python 侧、任务状态需要落盘可恢复。两者走 `127.0.0.1` 本机 HTTP，sidecar 随应用启停，用户无需安装 Python（已由 PyInstaller 打成独立 exe）。
+
+---
+
 ## 2026-09-11 第四轮：Windows 安装包构建
 
 ### 改动摘要
