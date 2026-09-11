@@ -53,23 +53,39 @@ export const useAppStore = create<AppState>((set, get) => ({
   async init() {
     const bridge = window.assetagent;
     if (bridge) {
-      bridge.onSidecarStatus((next) => set({ sidecar: next }));
+      // sidecar 从未就绪变为就绪时：启动期的"连不上"报错已过时，
+      // 清掉横幅并把初始化数据重新拉一遍 —— 否则横幅会永远挂在界面上
+      const applyStatus = async (status: SidecarStatus): Promise<boolean> => {
+        const wasReady = get().sidecar?.state === 'ready';
+        set({ sidecar: status });
+        if (status.state === 'ready' && !wasReady) {
+          set({ error: null });
+          await get().handle(async () => {
+            await Promise.all([get().refreshAssets(), get().refreshPresets(), get().refreshSettings()]);
+          });
+        }
+        return status.state === 'ready';
+      };
+
+      bridge.onSidecarStatus((next) => {
+        void applyStatus(next);
+      });
+
+      // 轮询兜底：IPC 推送有竞态（页面加载可能早于 sidecar 就绪）
       const poll = async (): Promise<boolean> => {
         try {
-          const status = await bridge.getSidecarStatus();
-          set({ sidecar: status });
-          return status.state === 'ready';
+          return await applyStatus(await bridge.getSidecarStatus());
         } catch {
           return false;
         }
       };
       await poll();
-      // IPC 推送有竞态（页面加载可能早于 sidecar 就绪），轮询兜底直到 ready
       let tries = 0;
       const timer = setInterval(async () => {
         tries += 1;
         if ((await poll()) || tries > 60) clearInterval(timer);
       }, 1500);
+      return; // 桌面模式：数据加载由 applyStatus 在就绪时触发
     }
     await get().handle(async () => {
       await Promise.all([get().refreshAssets(), get().refreshPresets(), get().refreshSettings()]);

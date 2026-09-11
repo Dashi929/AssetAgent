@@ -11,6 +11,28 @@
 
 ---
 
+## 2026-09-11 第十一轮：修复陈旧错误横幅 —— 就绪后自动恢复
+
+### 改动摘要
+用户仍看到"连不上本地服务"。用 CDP（`--remote-debugging-port=9222` + Node WebSocket）在打包版页面里直接执行 fetch，实测 **200 OK** —— 网络、CSP、CORS 全部正常。真相：横幅是启动期的**陈旧错误**。页面加载早于 sidecar 就绪 → 首次数据加载失败 → 错误横幅挂上 → 第十轮修的状态推送让徽章变绿了，但没人重试数据加载、也没人清横幅，于是"应用明明是好的，界面却报连不上"。
+
+### 修复
+`src/store/useAppStore.ts`：`applyStatus()` 统一处理状态——sidecar 从未就绪变为 ready 时，**清掉 error 并重拉 assets/presets/settings**。桌面模式的数据加载改由就绪事件触发（轮询 + IPC 推送双通道都会走到）。
+
+### 排障方法论（下一个 Agent 直接看这里）
+打包版渲染进程的网络问题，用 `AssetAgent.exe --remote-debugging-port=9222` + `curl http://127.0.0.1:9222/json` + Node 内置 WebSocket 跑 CDP `Runtime.evaluate`，在**真实页面环境**里执行 fetch 拿第一手报错 —— 比隔着日志猜快得多。判定依据：uvicorn 访问日志里有没有渲染进程的请求（CORS 拦截不挡发送、CSP/未发送才会没日志）。
+
+### 附带发现
+- main.ts 的 console-message 钩子在 Electron 32 新事件签名下失效（level 参数不再是数字），console 报错实际没被记录 —— 待修（本期未修，见已知问题 #9）
+- file:// 页面的 fetch 到 http://127.0.0.1 完全正常（CSP 的 connect-src http://127.0.0.1:* 工作正常；CORS 白名单里的 "null" 条目覆盖 file:// 的 Origin: null）
+
+### 验证状态
+- typecheck 通过；便携版重建并打开
+- **实锤**：uvicorn 访问日志首次出现渲染进程的数据请求（assets/presets/settings 全 200）
+- 待用户复测：界面应直接进入工作台，无"连不上"横幅
+
+---
+
 ## 2026-09-11 第十轮：修复"连不上本地服务" —— 状态推送竞态 + 端口缓存
 
 ### 改动摘要
@@ -412,6 +434,7 @@ npx electron-builder --win nsis
 
 | # | 问题 | 影响 | 认领节点 | 备注 |
 |---|---|---|---|---|
+| 9 | **console-message 钩子在 Electron 32 新事件签名下失效**：level 参数不再是数字，渲染进程的 console 报错实际没被记录进 main.log | 排障时少一路证据 | M5 | 改用事件对象签名（event.level），兼容两种签名 |
 | 8 | **拖 FBX 后闪退，根因未定位**：导入本身成功（GLB 健康），管线 60% 时三进程全灭；怀疑渲染/GPU 进程崩溃连锁退出，或拖拽导航（第九轮已阻断） | 用户无法导入 FBX | **第九轮日志已就位，等复测** | 复测后读 `%LOCALAPPDATA%\AssetAgent\logs\` 三份日志定位 |
 | 1 | **UV 展开无法保证零重叠**：xatlas Python 绑定不暴露 padding，实测约 0.04% 面有微小重叠 | 校验器的 UV 重叠规则暂时按 WARN 报 | M3 | 需换 Blender Smart UV Project 或补去重叠后处理 |
 | 2 | **四边面重拓扑未实现**：`want_quads` 只被记录，实际输出仍是三角面 | 四边面规则默认关闭 | W2 末 Spike | 决定是否真做（见 5.4.3） |
