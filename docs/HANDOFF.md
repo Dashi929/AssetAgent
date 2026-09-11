@@ -10,6 +10,67 @@
 
 ---
 
+## 2026-09-11 第四轮：Windows 安装包构建
+
+### 改动摘要
+搭建完整的 Windows 安装包构建流水线：PyInstaller 打包 sidecar → Electron 构建 → electron-builder 生成 NSIS 安装程序。用户不再需要安装 Python，双击安装后即可运行。
+
+### 详细变更
+
+| 文件 | 变更 |
+|---|---|
+| `scripts/sidecar_entry.py` | PyInstaller 打包入口。直接创建 FastAPI app 实例并启动 uvicorn，绕过字符串模块引用（PyInstaller 静态分析无法追踪字符串引用） |
+| `scripts/build-all.py` | 一键构建脚本：安装 PyInstaller → 打包 sidecar（含 hidden-imports + recipes 数据文件）→ 构建 Electron → electron-builder 生成安装程序 |
+| `apps/desktop/electron/sidecar.ts` | `resolveExecutable()` 替代 `resolvePython()`：**打包后优先查找 `.exe`**，找不到才 fallback 到 Python。`start()` 根据类型决定 spawn 参数（.exe 不需要 `-m uvicorn`） |
+| `apps/desktop/package.json` | `extraResources` 新增 `sidecar-dist` 目录；`scripts` 新增 `dist:full` 指向 `build-all.py` |
+| `.gitignore` | 新增 `sidecar-build/`、`sidecar-dist/` 排除（PyInstaller 构建产物体积大，不入库） |
+
+### 构建产物
+- `apps/desktop/release/AssetAgent Setup 0.1.0.exe` —— **117MB NSIS 安装程序**
+- `apps/desktop/release/win-unpacked/AssetAgent.exe` —— **186MB 便携版**（不解压直接用）
+- `apps/desktop/sidecar-dist/assetagent-sidecar.exe` —— **11.7MB** sidecar 独立可执行文件
+
+### 使用方法
+
+**一键构建（完整流程）：**
+```bash
+cd scripts
+python build-all.py
+```
+
+**手动分步：**
+```bash
+# 1. 打包 sidecar（PyInstaller）
+cd services/agent
+.venv/Scripts/python -m PyInstaller --onefile --name assetagent-sidecar \
+  --distpath ../../apps/desktop/sidecar-dist \
+  scripts/sidecar_entry.py
+
+# 2. 构建 Electron
+cd apps/desktop
+npm run build:all
+
+# 3. 打包安装程序
+npx electron-builder --win nsis
+```
+
+**用户安装后运行：**
+双击 `AssetAgent.exe`，sidecar 作为子进程自动启动，不需要单独装 Python。
+
+### 验证状态
+- PyInstaller 打包成功：`assetagent-sidecar.exe` 可执行
+- Electron 构建成功：`npm run build:all` 无错误
+- electron-builder 成功：`AssetAgent Setup 0.1.0.exe` 已生成
+
+### 本轮引入的新问题
+| # | 问题 | 原因 | 解决方向 |
+|---|---|---|---|
+| 8 | 安装包体积 117MB（偏大）| Electron 本体 113MB + sidecar 12MB + three.js 1MB | 后续可考虑 Electron 的 `portable` 目标减少打包体积；或提供 zip 便携版 |
+| 9 | PyInstaller 的 hidden-import 警告 | `app.config` 等模块报错 "not found"，但产物仍能工作 | 不影响功能；如需消除警告，可在 entry point 显式 import 所有子模块 |
+| 10 | 无代码签名 | electron-builder 跳过签名（没有证书）| Windows SmartScreen 可能拦截。开发阶段正常；正式发布需购买代码签名证书 |
+
+---
+
 ## 2026-09-11 第三轮：全局异常处理器
 
 ### 改动摘要
