@@ -52,16 +52,24 @@ hidden = [
     "app.routers.assets", "app.routers.files", "app.routers.jobs",
     "app.routers.meta", "app.routers.settings",
     "app.providers.base", "app.providers.mock", "app.providers.meshy",
-    "app.providers.tripo", "app.providers.rodin", "app.providers.local_trellis",
+    "app.providers.tripo", "app.providers.rodin", "app.providers.hunyuan3d",
+    "app.providers.local_trellis",
     "app.providers.polling", "app.providers.registry",
     "app.tools.repair", "app.tools.decimate", "app.tools.uv", "app.tools.bake",
     "app.tools.export", "app.tools.render", "app.tools.validate", "app.tools.pipeline",
-    "app.tools.blender", "app.tools.mesh_io", "app.tools.raster",
+    "app.tools.blender", "app.tools.convert", "app.tools.mesh_io", "app.tools.raster",
     "uvicorn.logging", "uvicorn.loops.auto",
     "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",
 ]
 for mod in hidden:
     cmd.extend(["--hidden-import", mod])
+
+# 内置 FBX 转换器（native/build.py 编译产物），打包后落在 _MEIPASS 根
+ufbx_tool = SIDEcar_DIR / "bin" / "ufbx2obj.exe"
+if ufbx_tool.is_file():
+    cmd.append(f"--add-binary={ufbx_tool};.")
+else:
+    print(f"⚠ 未找到 {ufbx_tool}，打包出的应用 FBX 导入将回退到 Blender")
 
 cmd.append(str(entry))
 

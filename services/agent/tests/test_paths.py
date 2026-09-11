@@ -119,3 +119,32 @@ def test_app_root_points_at_repo_in_dev(monkeypatch):
     root = paths.app_root()
     assert (root / "services" / "agent").is_dir()
     assert isinstance(root, Path)
+
+
+def test_native_tool_resolved_from_dev_bin(monkeypatch):
+    """开发模式：内置转换器在 services/agent/bin/ 下（exe 随仓库提交）。"""
+    monkeypatch.setattr(paths, "FROZEN", False)
+    tool = paths.find_ufbx2obj()
+    if tool is None:
+        tool = paths.native_bin_dir() / "ufbx2obj.exe"  # bin 目录总该存在
+    assert paths.native_bin_dir().name == "bin"
+    assert "services" in str(paths.native_bin_dir())
+
+
+def test_native_tool_resolved_from_meipass_when_frozen(monkeypatch, tmp_path):
+    """打包后：--add-binary 把转换器放进 _MEIPASS 根，必须从那里找到。"""
+    exe = tmp_path / "ufbx2obj.exe"
+    exe.write_bytes(b"MZ fake")
+    monkeypatch.setattr(paths, "FROZEN", True)
+    monkeypatch.setattr(paths, "meipass_dir", lambda: tmp_path)
+
+    assert paths.native_bin_dir() == tmp_path
+    assert paths.find_ufbx2obj() == exe
+
+
+def test_native_tool_returns_none_when_missing(monkeypatch, tmp_path):
+    """转换器缺失返回 None（调用方回落 Blender），绝不返回不存在的路径。"""
+    monkeypatch.setattr(paths, "FROZEN", True)
+    monkeypatch.setattr(paths, "meipass_dir", lambda: tmp_path)  # 空目录
+
+    assert paths.find_ufbx2obj() is None

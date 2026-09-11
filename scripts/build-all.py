@@ -112,6 +112,7 @@ def build_sidecar(python: Path) -> Path:
     # 显式列出隐藏导入 —— 静态分析追踪不到一些动态导入的模块
     hidden_imports = [
         "app.config",
+        "app.paths",
         "app.models",
         "app.store",
         "app.jobs",
@@ -127,6 +128,7 @@ def build_sidecar(python: Path) -> Path:
         "app.providers.meshy",
         "app.providers.tripo",
         "app.providers.rodin",
+        "app.providers.hunyuan3d",
         "app.providers.local_trellis",
         "app.providers.polling",
         "app.providers.registry",
@@ -139,6 +141,7 @@ def build_sidecar(python: Path) -> Path:
         "app.tools.validate",
         "app.tools.pipeline",
         "app.tools.blender",
+        "app.tools.convert",
         "app.tools.mesh_io",
         "app.tools.raster",
         "uvicorn.logging",
@@ -168,6 +171,13 @@ def build_sidecar(python: Path) -> Path:
     recipes_src = REPO_ROOT / "recipes"
     if recipes_src.exists():
         cmd.extend(["--add-data", f"{recipes_src}{os.pathsep}recipes"])
+
+    # 内置 FBX 转换器（native/build.py 编译产物），打包后落在 _MEIPASS 根
+    ufbx_tool = SIDEcar_DIR / "bin" / "ufbx2obj.exe"
+    if ufbx_tool.is_file():
+        cmd.append(f"--add-binary={ufbx_tool}{os.pathsep}.")
+    else:
+        print(f"⚠ 未找到 {ufbx_tool}，打包出的应用 FBX 导入将回退到 Blender")
 
     cmd.append(str(entry))
 
@@ -200,10 +210,11 @@ def package_installer() -> Path:
 
     run([NPM_CMD, "run", "dist"], cwd=DESKTOP_DIR)
 
-    release_dir = DESKTOP_DIR / "release"
-    installers = list(release_dir.glob("*.exe"))
+    # package.json build.directories.output = "build"（第四轮曾是 release/，勿回退）
+    output_dir = DESKTOP_DIR / "build"
+    installers = list(output_dir.glob("*.exe"))
     if not installers:
-        print(f"找不到安装程序：{release_dir}")
+        print(f"找不到安装程序：{output_dir}")
         sys.exit(1)
 
     installer = max(installers, key=lambda p: p.stat().st_mtime)

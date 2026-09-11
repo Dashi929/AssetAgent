@@ -78,6 +78,29 @@ def find_recipes_dir() -> Path:
     return app_root() / "recipes"
 
 
+def native_bin_dir() -> Path:
+    """内置原生工具（ufbx2obj 等）所在目录。
+
+    开发 = services/agent/bin/（exe 随仓库提交）；打包 = _MEIPASS
+    （build 脚本用 --add-binary 塞进 sidecar exe，onefile 解压到临时目录根）。
+    Electron 以源码 fallback 模式跑 sidecar 时，extraResources 拷贝的
+    services/agent/ 里同样带着 bin/，__file__ 推导依然成立。
+    """
+    if FROZEN:
+        meipass = meipass_dir()
+        if meipass is not None:
+            return meipass
+        return app_root()
+    return Path(__file__).resolve().parents[1] / "bin"
+
+
+def find_ufbx2obj() -> Path | None:
+    """定位内置 FBX 转换器。不存在返回 None（调用方走 Blender 回落）。"""
+    name = "ufbx2obj.exe" if sys.platform == "win32" else "ufbx2obj"
+    candidate = native_bin_dir() / name
+    return candidate if candidate.is_file() else None
+
+
 def default_data_dir() -> Path:
     """用户数据目录。
 
@@ -109,6 +132,8 @@ __all__ = [
     "app_root",
     "default_data_dir",
     "find_recipes_dir",
+    "find_ufbx2obj",
     "meipass_dir",
+    "native_bin_dir",
     "resource_dir",
 ]

@@ -17,7 +17,7 @@ from app.providers.hunyuan3d import Hunyuan3DProvider, split_credentials
 from app.providers.registry import PRIORITY as PROVIDER_PRIORITY
 from app.tools import blender
 from app.tools.convert import convert_to_glb
-from app.tools.mesh_io import MeshError, load_mesh
+from app.tools.mesh_io import MeshError, load_mesh, uv_array
 
 # ------------------------------------------------------------------ 混元3D
 
@@ -60,11 +60,27 @@ def test_hunyuan3d_estimate_cost_uses_unit_price():
 
 
 # ------------------------------------------------------------------ FBX 导入
+#
+# 转换链是三级回落：内置 ufbx2obj（优先）→ Blender（可选）→ 报错。
+# 每个测试都显式钉死"哪一级可用"，避免依赖开发机的真实状态。
+
+FIXTURE_FBX = Path(__file__).parent / "fixtures" / "phong_cube.fbx"
 
 
 def _fbx_bytes() -> bytes:
     # 内容不重要：走到转换这一步之前只看扩展名
     return b"Kaydara FBX Binary  \x00\x1a\x00fake"
+
+
+def _no_ufbx(monkeypatch):
+    """钉死"内置转换器不存在"，让流程走 Blender 回落。"""
+    monkeypatch.setattr(paths, "find_ufbx2obj", lambda: None)
+
+
+needs_ufbx = pytest.mark.skipif(
+    paths.find_ufbx2obj() is None or not FIXTURE_FBX.exists(),
+    reason="需要仓库内置的 ufbx2obj.exe 与样例 FBX（Windows 开发机产物）",
+)
 
 
 def test_import_mesh_rejects_unknown_suffix(client):
@@ -76,8 +92,9 @@ def test_import_mesh_rejects_unknown_suffix(client):
     assert ".max" in response.json()["detail"]
 
 
-def test_import_fbx_without_blender_returns_400_and_archives(client, tmp_path, monkeypatch):
-    """FBX 依赖 Blender 转换：没有 Blender 时给 400 人话，且资产不留在处理中状态。"""
+def test_import_fbx_no_converter_returns_400_and_archives(client, monkeypatch):
+    """内置转换器缺失且无 Blender：400 人话，且资产不留在处理中状态。"""
+    _no_ufbx(monkeypatch)
     monkeypatch.setattr(blender, "available", lambda: False)
 
     response = client.post(
@@ -85,14 +102,15 @@ def test_import_fbx_without_blender_returns_400_and_archives(client, tmp_path, m
         files={"file": ("SM_Thing.fbx", _fbx_bytes(), "application/octet-stream")},
     )
     assert response.status_code == 400
-    assert "Blender" in response.json()["detail"]
+    assert "另存为 OBJ / GLB" in response.json()["detail"]  # 给了替代路径
 
     # 资产已被归档（列表接口默认不含归档），而不是以 PROCESSING 挂着误导用户
     assert client.get("/api/assets").json() == []
 
 
-def test_import_fbx_conversion_failure_surfaces_log(client, monkeypatch):
-    """Blender 在但转换失败：报错要带上 Blender 的日志尾部，方便排障。"""
+def test_import_fbx_blender_failure_surfaces_log(client, monkeypatch):
+    """内置转换器失败、Blender 顶上再失败：报错要带上两侧的日志，方便排障。"""
+    _no_ufbx(monkeypatch)
     monkeypatch.setattr(blender, "available", lambda: True)
     monkeypatch.setattr(blender, "run_script", lambda *a, **k: (False, "ERR ImportError: bad fbx"))
 
@@ -104,8 +122,8 @@ def test_import_fbx_conversion_failure_surfaces_log(client, monkeypatch):
     assert "bad fbx" in response.json()["detail"]
 
 
-def test_import_fbx_success_uses_glb_working_copy(client, monkeypatch):
-    """转换成功：版本节点的 mesh_path 指向 GLB 工作副本，原始 FBX 留在 source/。"""
+def test_import_fbx_blender_success_uses_glb_working_copy(client, monkeypatch):
+    """Blender 回落成功：版本节点指向 GLB 工作副本，原始 FBX 留在 source/。"""
     captured: dict = {}
 
     def fake_run_script(script_name, args, timeout=300):
@@ -115,6 +133,7 @@ def test_import_fbx_success_uses_glb_working_copy(client, monkeypatch):
         out.write_bytes(b"glTF-fake")
         return True, "OK {}"
 
+    _no_ufbx(monkeypatch)
     monkeypatch.setattr(blender, "available", lambda: True)
     monkeypatch.setattr(blender, "run_script", fake_run_script)
 
@@ -134,28 +153,76 @@ def test_import_fbx_success_uses_glb_working_copy(client, monkeypatch):
     assert captured["args"]["input"].endswith(".fbx")
 
 
-def test_convert_to_glb_passes_paths_to_blender(tmp_path, monkeypatch):
-    """convert_to_glb 只做拼装：脚本名、输入、输出都交给 blender.run_script。"""
-    src = tmp_path / "SM_Any.fbx"
-    src.write_bytes(b"fbx")
+@needs_ufbx
+def test_convert_with_real_ufbx_without_blender(tmp_path, monkeypatch):
+    """内置 ufbx 转换器独立工作：Blender 缺失也必须转换成功（本轮目标）。"""
+    monkeypatch.setattr(blender, "available", lambda: False)
 
-    seen: dict = {}
+    out = convert_to_glb(FIXTURE_FBX, tmp_path)
+    assert out.name == "phong_cube.glb"
+    mesh = load_mesh(out)
+    assert len(mesh.faces) >= 6  # 样例是个立方体
+
+
+@needs_ufbx
+def test_convert_preserves_uv_through_real_ufbx(tmp_path, monkeypatch):
+    """UV 必须活过 OBJ→GLB 两跳：这是占位材质机制存在的意义。"""
+    monkeypatch.setattr(blender, "available", lambda: False)
+
+    out = convert_to_glb(FIXTURE_FBX, tmp_path)
+    assert uv_array(load_mesh(out)) is not None
+
+
+@needs_ufbx
+def test_import_fbx_real_end_to_end(client, monkeypatch):
+    """API 全链路：真实 FBX 上传 → 内置转换 → import 节点指向可用 GLB。"""
+    monkeypatch.setattr(blender, "available", lambda: False)  # 证明没走 Blender
+
+    response = client.post(
+        "/api/assets/import-mesh",
+        files={"file": ("SM_Phong.fbx", FIXTURE_FBX.read_bytes(), "application/octet-stream")},
+    )
+    assert response.status_code == 201
+    asset_id = response.json()["asset"]["id"]
+    node = client.get(f"/api/assets/{asset_id}").json()["versions"][-1]
+    assert node["mesh_path"].endswith(".glb")
+    mesh = load_mesh(node["mesh_path"])
+    assert len(mesh.faces) >= 6
+
+
+def test_convert_falls_back_to_blender_when_ufbx_fails(tmp_path, monkeypatch):
+    """内置转换器解析失败时，Blender 用另一套解析器兜底。"""
+
+    def broken_exe(exe, src, obj):
+        raise MeshError("ufbx parse failed: garbage")
+
+    from app.tools import convert
+
+    monkeypatch.setattr(paths, "find_ufbx2obj", lambda: Path("C:/no/such/ufbx2obj.exe"))
+    monkeypatch.setattr(convert, "_run_ufbx2obj", broken_exe)
+    monkeypatch.setattr(blender, "available", lambda: True)
 
     def fake_run_script(script_name, args, timeout=300):
-        seen["script"] = script_name
-        seen["args"] = args
         out = Path(args["output"])
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(b"glb")
+        out.write_bytes(b"glTF-fake")
         return True, "OK {}"
 
-    monkeypatch.setattr(blender, "available", lambda: True)
     monkeypatch.setattr(blender, "run_script", fake_run_script)
 
-    result = convert_to_glb(src, tmp_path / "out")
-    assert seen["script"] == "convert_to_glb.py"
-    assert seen["args"] == {"input": str(src), "output": str(tmp_path / "out" / "SM_Any.glb")}
-    assert result == tmp_path / "out" / "SM_Any.glb"
+    out = convert_to_glb(FIXTURE_FBX, tmp_path)
+    assert out.name == "phong_cube.glb"
+    assert out.is_file()
+
+
+def test_convert_aggregates_errors_when_all_paths_fail(tmp_path, monkeypatch):
+    """两级都不可用：错误消息汇总各自原因，而不是只报最后一级。"""
+    _no_ufbx(monkeypatch)
+    monkeypatch.setattr(blender, "available", lambda: False)
+
+    with pytest.raises(MeshError) as excinfo:
+        convert_to_glb(FIXTURE_FBX, tmp_path)
+    assert "内置转换器缺失" in str(excinfo.value)
 
 
 def test_load_mesh_rejects_fbx_with_guidance(tmp_path):
@@ -168,5 +235,5 @@ def test_load_mesh_rejects_fbx_with_guidance(tmp_path):
 
 
 def test_dev_recipes_still_found():
-    """convert 脚本依赖 recipes 定位；确认本轮改动没破坏开发模式解析。"""
+    """convert 依赖 recipes 定位；确认本轮改动没破坏开发模式解析。"""
     assert (paths.find_recipes_dir() / "bpy" / "convert_to_glb.py").is_file()

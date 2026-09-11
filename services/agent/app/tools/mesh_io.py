@@ -34,7 +34,7 @@ def load_mesh(path: Path | str, process: bool = False) -> trimesh.Trimesh:
         raise MeshError(f"文件不存在：{path}")
     if path.suffix.lower() == ".fbx":
         raise MeshError(
-            "FBX 应在「导入模型」入口上传，会自动经 Blender 转成 GLB 工作副本。"
+            "FBX 应在「导入模型」入口上传，会自动转换为 GLB 工作副本。"
             "请重新从工作台的导入入口上传。"
         )
     if path.suffix.lower() not in SUPPORTED_EXTENSIONS:

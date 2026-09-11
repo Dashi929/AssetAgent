@@ -10,6 +10,41 @@
 
 ---
 
+## 2026-09-11 第八轮：ufbx 原生 FBX 导入 —— 摘掉 Blender 依赖
+
+### 改动摘要
+FBX 导入不再需要用户安装 Blender：基于 [ufbx](https://github.com/ufbx/ufbx)（单文件 C 解析器，MIT，Godot 4.3 / Blender 4.5 同款方案）写了内置转换器 `ufbx2obj`（612KB，随应用分发），转换链变为 **ufbx（内置，优先）→ Blender headless（可选回落）→ 报错给替代路径**。Blender 从"导入必需"降级为"可选增强"（烘焙/FBX 导出/转台仍用它，缺失时照旧降级跳过）。
+
+### 详细变更
+
+| 文件 | 变更 |
+|---|---|
+| `services/agent/native/ufbx/` | 新增。vendored ufbx 0.23.0 源码（ufbx.c/ufbx.h，MIT） |
+| `services/agent/native/fbx2obj.c` | 新增。FBX→OBJ：几何+UV、`node->geometry_to_world` 烘焙世界变换、行列式<0 翻转绕序、多网格合并（v/vt 全量写出，f 行分开引用两套索引，文件不膨胀）；输出 `mtllib`/`usemtl` 供 trimesh 保住 UV |
+| `services/agent/native/win_shim.h` | 新增。MinGW.org 老头文件缺 `_wfopen` 声明，不声明的话 64 位下指针截断会崩 |
+| `services/agent/native/build.py` | 新增。一键编译（gcc / MSVC cl 双支持） |
+| `services/agent/bin/ufbx2obj.exe` | 新增（随仓库提交，612KB），开发模式直接可用 |
+| `app/tools/convert.py` | 重写为三级回落。坑：trimesh 只在 OBJ 材质**带贴图**时才做 UV 拆分，配套写 1×1 白 PNG 占位材质（管线会用 xatlas 重展 UV，白图只是让导入 UV 活到 GLB） |
+| `app/paths.py` | 新增 `native_bin_dir()` / `find_ufbx2obj()`：开发= `bin/`，打包= `_MEIPASS`（`--add-binary` 落点） |
+| `scripts/build-sidecar-only.py` / `build-all.py` | `--add-binary` 捆绑 exe；hidden-import 补齐 `app.paths`/`app.tools.convert`/`hunyuan3d`（build-all 落后于 sidecar-only，已对齐）；顺手修 build-all.py 产物目录还写着旧的 `release/`（现应为 `build/`） |
+| `tests/test_hunyuan_import.py` | FBX 测试重写：真实 FBX 端到端 3 个（真实 exe 转换 / UV 存活 / API 全链路，`skipif` 兜底无 exe 环境）+ 回落链 4 个（Blender 兜底成功/失败、两级全挂错误汇总、无转换器 400 归档） |
+| `tests/fixtures/phong_cube.fbx` | 新增。带 UV 的最小 FBX 样本（来自 assimp 测试模型库，BSD-3，见 fixtures/README.md） |
+| `tests/test_paths.py` | 新增 3 个：原生工具开发/frozen/缺失三种定位行为 |
+| `apps/desktop/src/pages/Workbench.tsx` | 提示文案去掉"fbx 需要 Blender" |
+
+### 关键排障记录
+- `ufbx_triangulate_face` 返回的是**三角形个数**（不是索引数），按索引数校验会静默丢掉所有面 —— 症状是 OBJ 有 v/vt 但 f 为 0。
+- MinGW 编 ufbx.c 必须 `-include win_shim.h` 强制声明 `_wfopen`，否则 64 位下隐式声明把指针截断成 int。
+- 凭记忆写的"1×1 白 PNG base64"是坏的（PIL 报 broken data stream）——pillow 本来就是运行时依赖，直接用 PIL 生成，别手抄 base64。
+
+### 验证状态
+- `pytest tests`：**63 passed**（+7 净增）；ruff / tsc 全过
+- assimp 5 个真实 FBX 样本（box / cubes×2 / phong_cube / spider）转换全部通过，trimesh 验证 watertight/winding/UV 正常
+- **打包版 sidecar 实测**：重打后从 `_MEIPASS` 找到 ufbx2obj，`POST /api/assets/import-mesh` 上传真实 FBX → 201，import 节点指向 GLB 工作副本，原始 FBX 只读保留（测试资产已清理）
+- 安装包（electron-builder）尚未重打，需要时跑 `python scripts/build-all.py`
+
+---
+
 ## 2026-09-11 第七轮：拍板落地 —— 混元3D Provider + FBX 导入 + 校验阈值定源
 
 ### 改动摘要
@@ -376,4 +411,4 @@ npm run build       # Vite 生产构建
 
 1. **W1 必做**：拿到 API Key 后对照官方文档校正 Meshy / Tripo / 混元3D（TC3 动作名与版号）/ Rodin 端点
 2. **M1 验收**：在带显示器的开发机上双击 `build/AssetAgent Setup 0.1.0.exe` 安装启动，验证 Electron 壳 → sidecar 跨进程链路（sidecar 路径已实测通过，剩壳层未验证）
-3. **M3 认领**：UV 零重叠方案、Blender 脚本实机校正（含 convert_to_glb.py 的 FBX 真机转换验证）
+3. **M3 认领**：UV 零重叠方案、Blender 脚本实机校正（bpy 的烘焙/导出/转台；FBX 导入已由内置 ufbx 转换器真机验证，bpy convert_to_glb.py 仅是回落路径）
