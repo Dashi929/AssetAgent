@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
-from .. import store
+from .. import store, telemetry
 from ..jobs import ProgressReporter
 from ..models import (
     AssetStatus,
@@ -148,23 +149,36 @@ async def run_pipeline(
 
     for index, step in enumerate(step_list):
         progress.stage(index, total, f"执行 {step.value}…")
+        step_started = time.monotonic()
 
-        if step is JobStep.REPAIR:
-            current, payload = await _step_repair(current, spec)
-        elif step is JobStep.DECIMATE:
-            current, payload = await _step_decimate(current, spec)
-        elif step is JobStep.UV:
-            current, payload = await _step_uv(current)
-        elif step is JobStep.BAKE:
-            current, payload, baked_textures = await _step_bake(
-                current, source_high_path, asset_id, spec
+        try:
+            if step is JobStep.REPAIR:
+                current, payload = await _step_repair(current, spec)
+            elif step is JobStep.DECIMATE:
+                current, payload = await _step_decimate(current, spec)
+            elif step is JobStep.UV:
+                current, payload = await _step_uv(current)
+            elif step is JobStep.BAKE:
+                current, payload, baked_textures = await _step_bake(
+                    current, source_high_path, asset_id, spec
+                )
+            elif step is JobStep.VALIDATE:
+                current, payload = await _step_validate(
+                    current, asset_id, parent_id, spec, asset.name, baked_textures, summary
+                )
+            else:
+                continue
+        except Exception as exc:
+            # 每步耗时与失败原因都进埋点；异常继续上抛由任务层记 job_finished
+            telemetry.record(
+                "pipeline_step",
+                asset_id=asset_id,
+                step=step.value,
+                duration_ms=int((time.monotonic() - step_started) * 1000),
+                ok=False,
+                error_class=telemetry.error_class(exc),
             )
-        elif step is JobStep.VALIDATE:
-            current, payload = await _step_validate(
-                current, asset_id, parent_id, spec, asset.name, baked_textures, summary
-            )
-        else:
-            continue
+            raise
 
         # 每一步都产生一个版本节点（validate 除外，它不改网格）
         if step in STEP_OP:
@@ -184,6 +198,13 @@ async def run_pipeline(
 
         payload["step"] = step.value
         summary["steps"].append(payload)
+        telemetry.record(
+            "pipeline_step",
+            asset_id=asset_id,
+            step=step.value,
+            duration_ms=int((time.monotonic() - step_started) * 1000),
+            ok=True,
+        )
 
     # 缩略图（资产库网格用）
     thumb_dir = store.asset_dir(asset_id) / "thumbnails"
@@ -294,6 +315,14 @@ async def _step_validate(
     store.save_report(report)
     summary["report_id"] = report.id
     summary["textures"] = [str(p) for p in textures]
+    telemetry.record(
+        "validation",
+        asset_id=asset_id,
+        version_id=parent_id,
+        passed=report.passed,
+        failures=[r.label for r in report.failures],
+        counts=summarize(report),
+    )
 
     store.patch_asset(
         asset_id,

@@ -95,6 +95,11 @@ class Settings(BaseSettings):
         return self.data_dir / "usage.jsonl"
 
     @property
+    def telemetry_file(self) -> Path:
+        """本地埋点 JSONL（见 app/telemetry.py）。默认不上传。"""
+        return self.data_dir / "telemetry.jsonl"
+
+    @property
     def recipes_dir(self) -> Path:
         """校验规则与预设目录。打包后从 resources/recipes 读取。"""
         return find_recipes_dir()

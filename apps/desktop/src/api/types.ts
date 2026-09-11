@@ -208,3 +208,20 @@ export interface PresetsResponse {
   spec_presets: Record<string, SpecPreset>;
   export_presets: Record<string, { display_name: string; up_axis?: string; unit?: string; notes?: string }>;
 }
+
+/** 本地埋点聚合（GET /api/telemetry/summary）。原始数据在 data_dir/telemetry.jsonl。 */
+export interface TelemetrySummary {
+  month: string | null;
+  tasks_total: number;
+  tasks_failed: number;
+  success_rate: number | null;
+  avg_task_seconds: number | null;
+  avg_pipeline_step_seconds: number | null;
+  failure_categories: Record<string, number>;
+  generations: number;
+  generated_variants: number;
+  cost_cny: number;
+  variant_picks: number;
+  exports: number;
+  imports: number;
+}

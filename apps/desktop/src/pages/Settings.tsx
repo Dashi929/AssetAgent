@@ -8,11 +8,12 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { useAppStore } from '../store/useAppStore';
-import type { Diagnostics } from '../api/types';
+import type { Diagnostics, TelemetrySummary } from '../api/types';
 
 export function Settings() {
   const { sidecar, settings, refreshSettings, handle } = useAppStore();
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null);
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const [log, setLog] = useState('');
@@ -25,6 +26,13 @@ export function Settings() {
     void (async () => {
       const data = await handle(() => api.getDiagnostics());
       if (data) setDiagnostics(data);
+    })();
+  }, [handle]);
+
+  useEffect(() => {
+    void (async () => {
+      const data = await handle(() => api.getTelemetrySummary());
+      if (data) setTelemetry(data);
     })();
   }, [handle]);
 
@@ -89,6 +97,20 @@ export function Settings() {
   const loadLog = async () => {
     const bridge = window.assetagent;
     setLog(bridge ? await bridge.getSidecarLog() : '（浏览器环境，没有 sidecar 日志）');
+  };
+
+  const downloadTelemetry = async () => {
+    await handle(async () => {
+      const text = await api.exportTelemetryRaw();
+      const blob = new Blob([text], { type: 'application/x-ndjson' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `assetagent-telemetry-${new Date().toISOString().slice(0, 10)}.ndjson`;
+      link.click();
+      URL.revokeObjectURL(url);
+      return true;
+    });
   };
 
   return (
@@ -295,6 +317,53 @@ export function Settings() {
           缺 Blender 不影响主流程：烘焙跳过、转台改用内置软渲染、导出只出 GLB。
           缺 mesh 后端则减面与 UV 会跳过，其余步骤照跑。
         </p>
+      </div>
+
+      <div className="card">
+        <h2>数据与遥测</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          埋点只落在本机（telemetry.jsonl），默认不上传。alpha 期如被邀请反馈，请点击下方按钮导出文件并回传。
+        </p>
+        {telemetry ? (
+          <dl className="kv">
+            <dt>任务</dt>
+            <dd>
+              {telemetry.tasks_total} 次 · 失败 {telemetry.tasks_failed} 次
+              {telemetry.success_rate !== null && ` · 成功率 ${(telemetry.success_rate * 100).toFixed(0)}%`}
+            </dd>
+            <dt>平均耗时</dt>
+            <dd>
+              任务 {telemetry.avg_task_seconds !== null ? `${telemetry.avg_task_seconds}s` : '—'}
+              {' · '}单步 {telemetry.avg_pipeline_step_seconds !== null ? `${telemetry.avg_pipeline_step_seconds}s` : '—'}
+            </dd>
+            <dt>生成</dt>
+            <dd>
+              {telemetry.generations} 次 · {telemetry.generated_variants} 个变体 · ¥
+              {telemetry.cost_cny.toFixed(2)}
+            </dd>
+            <dt>变体采纳</dt>
+            <dd>{telemetry.variant_picks} 次</dd>
+            <dt>导出 / 导入</dt>
+            <dd>
+              {telemetry.exports} 次 / {telemetry.imports} 次
+            </dd>
+            {Object.keys(telemetry.failure_categories).length > 0 && (
+              <>
+                <dt>失败分类</dt>
+                <dd className="mono">
+                  {Object.entries(telemetry.failure_categories)
+                    .map(([cls, n]) => `${cls}×${n}`)
+                    .join('、')}
+                </dd>
+              </>
+            )}
+          </dl>
+        ) : (
+          <p className="muted">暂无埋点数据。</p>
+        )}
+        <div className="row" style={{ marginTop: 10 }}>
+          <button onClick={downloadTelemetry}>导出埋点数据</button>
+        </div>
       </div>
     </div>
   );

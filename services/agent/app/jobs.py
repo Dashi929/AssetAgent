@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 
-from . import store
+from . import store, telemetry
 from .models import Job, JobStatus, JobStep, now
 
 logger = logging.getLogger("assetagent.jobs")
@@ -48,16 +49,21 @@ class JobRunner:
             job.status = JobStatus.RUNNING
             job.started_at = now()
             store.save_job(job)
+            telemetry.record("job_started", asset_id=asset_id, job_id=job.id, step=job.step.value)
+            started = time.monotonic()
+            failure: BaseException | None = None
             try:
                 await work(reporter)
             except asyncio.CancelledError:
                 job.status = JobStatus.CANCELLED
                 job.error = "任务已取消"
+                failure = asyncio.CancelledError()
                 raise
             except Exception as exc:  # 任务失败必须被记录，不能静默吞掉
                 logger.exception("任务失败 job=%s step=%s", job.id, job.step)
                 job.status = JobStatus.FAILED
                 job.error = f"{type(exc).__name__}: {exc}"
+                failure = exc
             else:
                 job.status = JobStatus.SUCCEEDED
                 job.progress = 1.0
@@ -66,6 +72,16 @@ class JobRunner:
             finally:
                 job.finished_at = now()
                 store.save_job(job)
+                telemetry.record(
+                    "job_finished",
+                    asset_id=asset_id,
+                    job_id=job.id,
+                    step=job.step.value,
+                    status=job.status.value,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    error_class=telemetry.error_class(failure),
+                    error=None if failure is None else str(failure)[:500],
+                )
                 self._tasks.pop(job.id, None)
 
         self._tasks[job.id] = asyncio.create_task(_run())

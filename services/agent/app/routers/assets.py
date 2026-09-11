@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 import shutil
+import time
 from datetime import UTC
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from .. import store
+from .. import store, telemetry
 from ..config import get_settings
 from ..jobs import runner
 from ..models import (
@@ -127,6 +128,7 @@ async def create_asset(body: CreateAssetBody) -> dict[str, Any]:
         prompt=body.prompt,
         tags=body.tags,
     )
+    telemetry.record("create_asset", asset_id=asset.id, source=asset.source)
     return _asset_summary(asset)
 
 
@@ -159,6 +161,7 @@ async def create_asset_with_images(
         store.archive_asset(asset.id)
         raise HTTPException(status_code=400, detail="没有读到任何有效的图片内容。")
 
+    telemetry.record("create_asset", asset_id=asset.id, source=asset.source, images=saved)
     return _asset_summary(store.get_asset(asset.id))
 
 
@@ -197,6 +200,7 @@ async def create_asset_from_mesh(
         try:
             mesh_path = convert_to_glb(target, store.version_dir(asset.id, node.id))
         except MeshError as exc:
+            telemetry.record("import_mesh", asset_id=asset.id, suffix=suffix, ok=False)
             store.archive_asset(asset.id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         node.params["converted_from"] = str(target)
@@ -205,6 +209,10 @@ async def create_asset_from_mesh(
     node.mesh_path = str(mesh_path)
     store.add_version(node)
     store.patch_asset(asset.id, status=AssetStatus.PROCESSING)
+    telemetry.record(
+        "create_asset", asset_id=asset.id, source=asset.source
+    )
+    telemetry.record("import_mesh", asset_id=asset.id, suffix=suffix, ok=True)
     return _asset_summary(store.get_asset(asset.id))
 
 
@@ -261,6 +269,7 @@ async def generate_variants(asset_id: str, body: GenerateBody) -> dict[str, Any]
     unit_cost = estimate / num_variants if num_variants else 0.0
 
     async def work(progress) -> None:
+        generate_started = time.monotonic()
         request = GenerateRequest(
             asset_id=asset_id,
             out_dir=batch_dir,
@@ -289,6 +298,14 @@ async def generate_variants(asset_id: str, body: GenerateBody) -> dict[str, Any]
                 "variants": len(results),
                 "cost": estimate,
             }
+        )
+        telemetry.record(
+            "generate",
+            asset_id=asset_id,
+            provider=provider.name,
+            variants=len(results),
+            cost=estimate,
+            duration_ms=int((time.monotonic() - generate_started) * 1000),
         )
 
     job = await runner.submit(asset_id, JobStep.GENERATE, work)
@@ -342,6 +359,19 @@ async def pick_variant(asset_id: str, body: PickVariantBody) -> dict[str, Any]:
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    # 采纳率埋点：分母是本资产生成的变体总数，分子是这次挑选
+    variants = store.list_variants(asset_id)
+    telemetry.record(
+        "pick_variant",
+        asset_id=asset_id,
+        variant_id=variant.id,
+        provider=variant.provider,
+        variant_index=next(
+            (i for i, v in enumerate(variants) if v.id == variant.id), None
+        ),
+        total_variants=len(variants),
+    )
+
     store.patch_asset(
         asset_id,
         picked_variant_id=variant.id,
@@ -390,6 +420,7 @@ async def export(asset_id: str, body: ExportBody) -> dict[str, Any]:
 
     out_dir = store.new_artifact_dir(asset_id, "exports", "exp")
     textures = sorted((store.asset_dir(asset_id) / "textures").glob("*.png"))
+    export_started = time.monotonic()
 
     try:
         result = export_asset(
@@ -401,6 +432,15 @@ async def export(asset_id: str, body: ExportBody) -> dict[str, Any]:
             source_mesh_path=mesh_path,
         )
     except Exception as exc:
+        telemetry.record(
+            "export",
+            asset_id=asset_id,
+            version_id=head.id,
+            preset=body.preset,
+            engine=telemetry.engine_from_preset(body.preset),
+            ok=False,
+            error_class=telemetry.error_class(exc),
+        )
         raise HTTPException(status_code=500, detail=f"导出失败：{exc}") from exc
 
     record = ExportRecord(
@@ -412,6 +452,16 @@ async def export(asset_id: str, body: ExportBody) -> dict[str, Any]:
     )
     store.add_export(record)
     store.patch_asset(asset_id, status=AssetStatus.EXPORTED)
+    telemetry.record(
+        "export",
+        asset_id=asset_id,
+        version_id=head.id,
+        preset=result["preset"],
+        engine=telemetry.engine_from_preset(result["preset"]),
+        files=len(result["files"]),
+        duration_ms=int((time.monotonic() - export_started) * 1000),
+        ok=True,
+    )
 
     return {
         "export": record.model_dump(mode="json"),

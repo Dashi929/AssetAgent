@@ -15,6 +15,7 @@ import type {
   PresetsResponse,
   SettingsSnapshot,
   SpecPreset,
+  TelemetrySummary,
   ValidationReport,
 } from './types';
 
@@ -191,6 +192,21 @@ export const api = {
 
   getReports: async (assetId: string): Promise<ValidationReport[]> =>
     (await request<AssetDetail>(`/api/assets/${assetId}`)).reports,
+
+  // ---------------------------------------------------------------- 埋点
+
+  getTelemetrySummary: (month?: string) =>
+    request<TelemetrySummary>(`/api/telemetry/summary${month ? `?month=${encodeURIComponent(month)}` : ''}`),
+
+  /** 原始埋点 NDJSON 文本（用户手动导出上报用）。 */
+  exportTelemetryRaw: async (month?: string): Promise<string> => {
+    const base = await resolveBaseUrl();
+    const response = await fetch(
+      `${base}/api/telemetry/export${month ? `?month=${encodeURIComponent(month)}` : ''}`,
+    );
+    if (!response.ok) throw new ApiError(`请求失败（HTTP ${response.status}）`, response.status);
+    return response.text();
+  },
 };
 
 export type { SpecPreset };
