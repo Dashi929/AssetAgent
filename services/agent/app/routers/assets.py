@@ -66,6 +66,7 @@ def _asset_summary(asset: Asset) -> dict[str, Any]:
         thumbnail = str(thumb_path)
     elif variants and variants[-1].thumbnail_path:
         thumbnail = variants[-1].thumbnail_path
+    turntable = sorted((store.asset_dir(asset.id) / "turntable").glob("turntable_*.png"))
 
     return {
         "asset": asset.model_dump(mode="json"),
@@ -75,6 +76,7 @@ def _asset_summary(asset: Asset) -> dict[str, Any]:
             "exports": len(exports),
         },
         "thumbnail": thumbnail,
+        "turntable": [str(p) for p in turntable],
         "validation": None
         if report is None
         else {

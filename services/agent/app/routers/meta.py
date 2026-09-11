@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import sys
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from .. import __version__
 from ..config import get_settings
 from ..presets import load_export_presets, load_spec_presets
-from ..providers import registry
+from ..providers import ProviderError, registry
 from ..tools import blender_available, decimate_backend
 
 router = APIRouter(prefix="/api", tags=["meta"])
@@ -29,6 +29,22 @@ async def presets() -> dict:
     return {
         "spec_presets": {k: v.model_dump(mode="json") for k, v in load_spec_presets().items()},
         "export_presets": load_export_presets(),
+    }
+
+
+@router.get("/estimate")
+async def estimate(provider: str = "", variants: int = 1) -> dict:
+    """生成前精确预估：按 Provider 自己的算法算（离线占位/本地模型报 ¥0，不报假价格）。"""
+    count = max(1, min(6, variants))
+    try:
+        resolved = registry.resolve(provider or None)
+    except ProviderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    settings = get_settings()
+    return {
+        "provider": resolved.name,
+        "variants": count,
+        "estimate_cny": resolved.estimate_cost(count, settings.cost_per_generation),
     }
 
 

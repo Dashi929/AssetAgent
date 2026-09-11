@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -212,6 +213,22 @@ async def run_pipeline(
         render_tool.render_thumbnail, current, thumb_dir / "thumbnail.png", 256
     )
     summary["thumbnail"] = thumb.get("path")
+
+    # 转台 8 帧（M6：供人工挑选与 Critic 视觉通道）。旧帧先清掉，重跑不混帧。
+    turntable_dir = store.asset_dir(asset_id) / "turntable"
+    if turntable_dir.exists():
+        shutil.rmtree(turntable_dir, ignore_errors=True)
+    head = store.head_version(asset_id)
+    turntable = await asyncio.to_thread(
+        render_tool.render_turntable,
+        current,
+        Path(head.mesh_path) if head else turntable_dir / "input.glb",
+        turntable_dir,
+        frames=8,
+        size=512,
+        prefer_blender=head is not None,
+    )
+    summary["turntable"] = {"files": turntable.get("files", []), "method": turntable.get("method")}
 
     progress(1.0, "管线完成")
     return summary

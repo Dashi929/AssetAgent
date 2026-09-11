@@ -161,6 +161,8 @@ export interface AssetSummary {
   asset: Asset;
   counts: { variants: number; versions: number; exports: number };
   thumbnail: string | null;
+  /** 管线跑完后的 8 帧转台图（turntable_00.png…），跑管线前为空数组 */
+  turntable: string[];
   validation: {
     id: string;
     passed: boolean;

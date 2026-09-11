@@ -195,6 +195,12 @@ export const api = {
 
   getPresets: () => request<PresetsResponse>('/api/presets'),
 
+  /** 按 Provider 自己的算法精确预估本次生成花费（离线占位/本地报 ¥0）。 */
+  getEstimate: (provider: string, variants: number) =>
+    request<{ provider: string; variants: number; estimate_cny: number }>(
+      `/api/estimate?provider=${encodeURIComponent(provider)}&variants=${variants}`,
+    ),
+
   getDiagnostics: () => request<Diagnostics>('/api/diagnostics'),
 
   getReports: async (assetId: string): Promise<ValidationReport[]> =>

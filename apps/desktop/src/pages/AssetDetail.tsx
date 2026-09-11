@@ -214,6 +214,25 @@ export function AssetDetail() {
             </div>
           )}
 
+          {(detail?.turntable?.length ?? 0) > 0 && (
+            <div className="card">
+              <h2>转台（{detail!.turntable.length} 帧）</h2>
+              <p className="muted" style={{ marginTop: 0 }}>
+                管线完成后的 8 帧环绕图，用于快速检查全角度形态与贴图接缝。
+              </p>
+              <div className="variant-strip">
+                {detail!.turntable.map((frame, index) => (
+                  <img
+                    key={frame}
+                    src={fileUrlSync(frame)}
+                    alt={`转台帧 ${index}`}
+                    style={{ width: 110, borderRadius: 8, border: '0.5px solid var(--border)' }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="card">
             <div className="row" style={{ marginBottom: 10 }}>
               <h2 style={{ margin: 0 }}>

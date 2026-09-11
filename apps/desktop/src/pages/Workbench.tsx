@@ -9,7 +9,7 @@
  * 文字为辅，且默认生成多个变体让美术挑，而不是接受唯一结果。
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAppStore } from '../store/useAppStore';
@@ -17,9 +17,12 @@ import JobProgress from '../components/JobProgress';
 
 type Mode = 'concept' | 'mesh';
 
+const ONBOARDING_KEY = 'assetagent.onboarding.dismissed';
+
 export function Workbench() {
   const navigate = useNavigate();
-  const { presets, settings, job, trackJob, clearJob, handle, setError, refreshAssets } = useAppStore();
+  const { presets, settings, job, trackJob, clearJob, handle, setError, refreshAssets, assets } =
+    useAppStore();
 
   const [mode, setMode] = useState<Mode>('concept');
   const [dragging, setDragging] = useState(false);
@@ -29,7 +32,36 @@ export function Workbench() {
   const [variants, setVariants] = useState(3);
   const [provider, setProvider] = useState('');
   const [pickedFiles, setPickedFiles] = useState<File[]>([]);
+  const [estimateCny, setEstimateCny] = useState<number | null>(null);
+  const [estimateProvider, setEstimateProvider] = useState('');
+  const [showOnboarding, setShowOnboarding] = useState(
+    () => localStorage.getItem(ONBOARDING_KEY) !== '1',
+  );
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // 精确预估：走 Provider 自己的算法（离线占位/本地模型报 ¥0，不报假价格）。
+  // 静默失败（sidecar 未就绪等）不弹全局错误，只把预估留空。
+  useEffect(() => {
+    if (mode !== 'concept') {
+      setEstimateCny(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await api.getEstimate(provider, variants);
+        if (!cancelled) {
+          setEstimateCny(result.estimate_cny);
+          setEstimateProvider(result.provider);
+        }
+      } catch {
+        if (!cancelled) setEstimateCny(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, provider, variants]);
 
   const presetList = useMemo(() => Object.entries(presets?.spec_presets ?? {}), [presets]);
   const activePresetKey = presetKey || presetList[0]?.[0] || '';
@@ -40,7 +72,6 @@ export function Workbench() {
     [settings],
   );
   const readyProviders = providerList.filter((p) => p.has_key);
-  const estimate = (settings?.cost_per_generation_cny ?? 0) * variants;
 
   const onDrop = useCallback(
     (event: React.DragEvent) => {
@@ -132,6 +163,22 @@ export function Workbench() {
         onCancel={() => job && api.cancelJob(job.id)}
         onDismiss={clearJob}
       />
+
+      {showOnboarding && assets.length === 0 && (
+        <div className="banner info">
+          <strong>三步出资产：</strong>① 把概念图拖进下方区域（没有图？直接拖 FBX/GLB 走免费后处理）
+          → ② 从生成的变体里挑一个 → ③ 跑管线、看校验、导出到引擎。
+          没配 API Key 也能完整走通（生成走离线占位模式）。&nbsp;
+          <button
+            onClick={() => {
+              localStorage.setItem(ONBOARDING_KEY, '1');
+              setShowOnboarding(false);
+            }}
+          >
+            知道了
+          </button>
+        </div>
+      )}
 
       <div className="card">
         <div
@@ -252,8 +299,12 @@ export function Workbench() {
           <button className="primary" onClick={submit}>
             {mode === 'concept' ? '开始生成' : '开始后处理'}
           </button>
-          {mode === 'concept' && estimate > 0 && (
-            <span className="muted">本次预估花费 ¥{estimate.toFixed(2)}</span>
+          {mode === 'concept' && estimateCny !== null && (
+            <span className="muted">
+              {estimateCny > 0
+                ? `本次预估花费 ¥${estimateCny.toFixed(2)}（${estimateProvider}）`
+                : `本次免费（将走 ${estimateProvider || '离线占位'} 模式）`}
+            </span>
           )}
         </div>
       </div>
