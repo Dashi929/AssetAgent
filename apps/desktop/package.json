@@ -15,7 +15,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "lint": "eslint src electron --ext .ts,.tsx",
     "start": "npm run build:all && electron .",
-    "dist": "npm run build:all && electron-builder"
+    "dist": "npm run build:all && electron-builder",
+    "dist:full": "python ../../scripts/build-all.py"
   },
   "dependencies": {
     "@react-three/drei": "^9.114.0",
@@ -51,6 +52,10 @@
       "dist-electron/**/*"
     ],
     "extraResources": [
+      {
+        "from": "sidecar-dist",
+        "to": "sidecar-dist"
+      },
       {
         "from": "../../services/agent",
         "to": "sidecar",

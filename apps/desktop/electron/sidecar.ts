@@ -37,11 +37,11 @@ export class SidecarManager {
   async start(): Promise<SidecarStatus> {
     this.status = { state: 'starting', baseUrl: '' };
 
-    const python = this.resolvePython();
-    if (!python) {
+    const exec = this.resolveExecutable();
+    if (!exec) {
       return this.fail(
-        '找不到 Python 解释器。请设置环境变量 ASSETAGENT_PYTHON 指向 python.exe，' +
-          '或在 services/agent 下创建 .venv 虚拟环境。',
+        '找不到 sidecar 可执行文件。请确认安装包完整，' +
+          '或设置环境变量 ASSETAGENT_PYTHON 指向 python.exe。',
       );
     }
 
@@ -49,11 +49,16 @@ export class SidecarManager {
     const baseUrl = `http://127.0.0.1:${port}`;
 
     try {
-      this.child = spawn(python, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)], {
-        cwd: this.sidecarDir(),
+      const args = exec.type === 'exe'
+        ? []  // .exe 内置了 uvicorn 启动逻辑
+        : ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)];
+
+      this.child = spawn(exec.path, args, {
+        cwd: exec.type === 'python' ? this.sidecarDir() : path.dirname(exec.path),
         env: {
           ...process.env,
           ASSETAGENT_PORT: String(port),
+          ASSETAGENT_HOST: '127.0.0.1',
           PYTHONUNBUFFERED: '1',
           PYTHONIOENCODING: 'utf-8',
         },
@@ -82,7 +87,7 @@ export class SidecarManager {
       return this.fail('sidecar 启动超时（60 秒内没有响应健康检查）');
     }
 
-    this.status = { state: 'ready', baseUrl, pythonPath: python };
+    this.status = { state: 'ready', baseUrl, pythonPath: exec.path };
     return this.status;
   }
 
@@ -129,33 +134,43 @@ export class SidecarManager {
     return path.join(this.repoRoot, 'services', 'agent');
   }
 
-  private resolvePython(): string | null {
-    const candidates: string[] = [];
-
-    if (process.env.ASSETAGENT_PYTHON) {
-      candidates.push(process.env.ASSETAGENT_PYTHON);
-    }
-
-    const venvNames = ['Scripts/python.exe', 'bin/python3', 'bin/python'];
-    for (const rel of venvNames) {
-      candidates.push(path.join(this.sidecarDir(), '.venv', rel));
-      candidates.push(path.join(this.repoRoot, 'services', 'agent', '.venv', rel));
-    }
-
-    if (process.platform === 'win32') {
-      candidates.push('python.exe', 'python3.exe');
-    } else {
-      candidates.push('python3', 'python');
-    }
-
-    for (const candidate of candidates) {
-      if (candidate.includes(path.sep) || candidate.includes('/')) {
-        if (fs.existsSync(candidate)) return candidate;
-      } else {
-        return candidate; // 交给 PATH 解析
+  private resolveExecutable(): { type: 'exe' | 'python'; path: string } | null {
+    // 1) 打包后的独立 .exe（优先级最高）
+    if (!this.isDev) {
+      const packagedExe = path.join(process.resourcesPath ?? '', 'sidecar-dist', 'assetagent-sidecar.exe');
+      if (fs.existsSync(packagedExe)) {
+        return { type: 'exe', path: packagedExe };
       }
     }
-    return null;
+
+    // 2) 开发时直接构建的 .exe
+    const devExe = path.join(this.repoRoot, 'apps', 'desktop', 'sidecar-dist', 'assetagent-sidecar.exe');
+    if (fs.existsSync(devExe)) {
+      return { type: 'exe', path: devExe };
+    }
+
+    // 3) 环境变量指定
+    if (process.env.ASSETAGENT_PYTHON) {
+      if (fs.existsSync(process.env.ASSETAGENT_PYTHON)) {
+        return { type: 'python', path: process.env.ASSETAGENT_PYTHON };
+      }
+    }
+
+    // 4) venv
+    const venvNames = ['Scripts/python.exe', 'bin/python3', 'bin/python'];
+    for (const rel of venvNames) {
+      const inSidecar = path.join(this.sidecarDir(), '.venv', rel);
+      if (fs.existsSync(inSidecar)) return { type: 'python', path: inSidecar };
+
+      const inRepo = path.join(this.repoRoot, 'services', 'agent', '.venv', rel);
+      if (fs.existsSync(inRepo)) return { type: 'python', path: inRepo };
+    }
+
+    // 5) 系统 PATH
+    if (process.platform === 'win32') {
+      return { type: 'python', path: 'python.exe' };
+    }
+    return { type: 'python', path: 'python3' };
   }
 
   private async findFreePort(): Promise<number> {

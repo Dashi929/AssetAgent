@@ -7,6 +7,10 @@ release/
 .eslintcache
 .vite/
 
+# ---- PyInstaller sidecar 构建产物 ----
+sidecar-build/
+sidecar-dist/
+
 # ---- Python ----
 __pycache__/
 *.py[cod]
