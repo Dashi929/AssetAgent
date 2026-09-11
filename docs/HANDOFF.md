@@ -39,7 +39,12 @@
 - `ruff check`（app / tests / sidecar_entry / 两个 build 脚本）：All checks passed
 - `python -m app.smoke`：全链路跑通，校验通过（6 PASS / 1 WARN / 2 SKIP）
 - `package.json` JSON 校验通过；`icon.ico` 为合法多尺寸 Windows 图标资源
-- **尚未验证**：`sidecar-dist/` 里的 exe 还是第五轮旧代码打的 —— 需重跑 `python scripts/build-sidecar-only.py` 重新打包，并真机确认数据目录落到 `%LOCALAPPDATA%\AssetAgent`
+- **重新打包 + 安装布局实测通过**（本轮收尾）：
+  - `build-sidecar-only.py` 重打 sidecar exe，裸跑（旁边无 recipes）正确回退 _MEIPASS 快照
+  - `npm run build:all` + `npx electron-builder --win nsis` EXIT=0，无缺省图标警告（自定义图标已生效）
+  - 产物：`build/AssetAgent Setup 0.1.0.exe`（150MB）+ `win-unpacked/`（asar 1.1MB / recipes 32K / sidecar 源码 263K / sidecar-dist 68M）
+  - **从 `win-unpacked/resources/sidecar-dist/` 运行 exe**：规则目录正确解析到 `resources\recipes`（安装目录，非 _MEIPASS），数据目录落到 `%LOCALAPPDATA%\AssetAgent`，`ASSETAGENT_PORT` 覆盖生效，/api/health 正常
+  - 仍待真机：双击安装包 → 启动 Electron 壳 → 跨进程链路（已知问题 #5，需带显示器的机器）
 
 ---
 
@@ -328,7 +333,6 @@ npm run build       # Vite 生产构建
 ## 下一步（按优先级）
 
 1. **W0 前置**：团队规模（8 周 / 12 周口径）—— 需用户拍板
-2. **重打包验证**：第六轮路径代码只过了单测，`sidecar-dist/` 里的 exe 还是旧代码 —— 重跑 `python scripts/build-sidecar-only.py` + electron-builder，真机确认数据目录落到 `%LOCALAPPDATA%\AssetAgent`
-3. **W1 必做**：拿到 API Key 后对照官方文档校正 Meshy/Tripo/Rodin 端点
-4. **M1 验收**：在带显示器的开发机上启动 Electron，验证跨进程链路
-5. **M3 认领**：UV 零重叠方案、Blender 脚本实机校正
+2. **W1 必做**：拿到 API Key 后对照官方文档校正 Meshy/Tripo/Rodin 端点
+3. **M1 验收**：在带显示器的开发机上双击 `build/AssetAgent Setup 0.1.0.exe` 安装启动，验证 Electron 壳 → sidecar 跨进程链路（sidecar 路径已实测通过，剩壳层未验证）
+4. **M3 认领**：UV 零重叠方案、Blender 脚本实机校正
