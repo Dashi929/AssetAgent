@@ -36,7 +36,7 @@ Provider 打通 → 生成落盘 → 修复/减面 → UV/烘焙 → 校验 → 
 
 | 决策点 | 时间 | 结论 |
 |---|---|---|
-| 四边面重拓扑是否进 MVP | **W2 末**（依据 M1 的 Spike 结果） | 待 Spike |
+| 四边面重拓扑是否进 MVP | ~~W2 末~~ **Spike 已完成（2026-09-12，结论材料 [spike-quad-remesh.md](spike-quad-remesh.md)）** | **建议不进 MVP**（PyPI 无可用 quad 重拓扑包；推荐 Phase 2 走 Blender Quadriflow 路径，出口标准已定）—— 待产品拍板 |
 | ~~校验阈值与引擎规范从哪来~~ | ~~W0~~ | **已拍板**：由行业通行规范提取（Unity/UE 官方口径 + 工作室惯例），已写入 `recipes/validation_rules.yaml` 并标注依据；TA 复核为强化项 |
 | ~~云生成质量是否达"道具级可用"~~ | ~~W2 末~~ | **已拍板**：Meshy / Tripo / 混元3D 三家自由可选，不设唯一主 Provider；质量横评降级为参考项，不再阻塞决策 |
 
