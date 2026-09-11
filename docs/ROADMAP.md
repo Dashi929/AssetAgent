@@ -70,15 +70,15 @@ Provider 打通 → 生成落盘 → 修复/减面 → UV/烘焙 → 校验 → 
 任务耗时、每步耗时、失败原因分类、生成次数与花费、变体是否被选中、校验明细、导出次数与引擎类型。
 本地 JSONL，默认不上传；alpha 期由用户手动导出上报。
 
-## 已知缺口（首版代码留下的，按节点认领）
+## 已知缺口（2026-09-12 更新）
 
-| # | 缺口 | 影响 | 认领节点 |
+| # | 缺口 | 影响 | 状态 |
 |---|---|---|---|
-| 1 | **UV 展开无法保证零重叠**：xatlas 的 Python 绑定不暴露 padding 参数，实测约 0.04% 的面有微小重叠 | 校验器的 UV 重叠规则暂时按 WARN 报，不阻断导出 | M3：换 Blender Smart UV Project 或补去重叠后处理，然后把规则改回 FAIL |
-| 2 | **四边面重拓扑未实现**：`want_quads` 只被记录，实际输出仍是三角面 | 四边面规则在配置里默认关闭 | W2 末的 Spike 结论决定是否真做（见 5.4.3） |
-| 3 | **云 Provider 端点未对照官方文档校正**：Meshy / Tripo / 混元3D / Rodin 的 endpoint 与字段是按下标写的（混元3D 的 TC3 签名算法为公共约定，动作名与 API 版号需重点核对） | 首次真实调用可能失败 | W1：拿到 Key 后逐一校正，端点集中在各 provider 文件顶部常量区 |
-| 4 | **烘焙与 FBX 导出未在真实 Blender 上验证**：`recipes/bpy/*.py` 只做了静态检查 | 装了 Blender 的机器上可能报错 | M3：在带 Blender 的机器上跑一次，校正 Blender 4.x API 差异 |
-| 5 | **前端未在真实 Electron 里跑过**：代码已完成（主进程、preload、sidecar 生命周期、视口组件、页面路由），但沙箱/无头环境无法创建 BrowserWindow，跨进程链路（sidecar 拉起、IPC、文件对话框）未实测 | 首次真机启动可能遇到路径/端口/权限问题 | M1：这是"骨架贯通"节点的验收内容；CI 环境可加 `xvfb-run`（Linux）或虚拟显示驱动（Windows）做自动化测试 |
-| 6 | **Electron 在无头/沙箱环境启动受限**：`--disable-gpu --disable-gpu-sandbox --no-sandbox` 仍不足以绕过无显示服务器的限制；GPU 进程反复崩溃后被 fatal | CI 无法做 Electron E2E；不影响真机使用 | M1：在带显示器的开发机上验证；CI 阶段用 Playwright + `--remote-debugging-port` 测渲染进程，或跳过 E2E 只做单元测试 |
-| 7 | **资产包批量（工作流 B）未实现**：Planner 与风格圣经只有配置模板 | 只能逐件生成 | Phase 2 |
+| ~~1~~ | ~~UV 展开无法保证零重叠~~ | — | ✅ 2026-09-12：UV 岛重打包（构造保证零重叠 + 岛间距），规则改回 FAIL，黄金集 10/10 |
+| 2 | **四边面重拓扑未实现**：`want_quads` 只被记录 | 四边面规则默认关闭 | **Spike 完成（2026-09-12）**：建议不进 MVP，Phase 2 走 Blender Quadriflow，材料见 [spike-quad-remesh.md](spike-quad-remesh.md) —— 待拍板 |
+| 3 | ~~云 Provider 端点未校正~~ | 真实调用可能仍有字段级出入 | ✅ 文档核对完成（2026-09-12，按官方 SDK 源码逐一校正）；**剩真 Key 冒烟，需用户提供 Key** |
+| 4 | **烘焙与 FBX 导出未在真实 Blender 上验证** | 装 Blender 的机器上 bpy 脚本可能有 4.x API 差异 | 未解决：需带 Blender 的机器 |
+| ~~5~~ | ~~前端未在真实 Electron 里跑过~~ | — | ✅ 2026-09-12：打包版真机走查通过（FBX 导入→管线→校验→转台→视口渲染，CDP 实证）；剩用户体感复测 |
+| 6 | Electron 无头/沙箱环境启动受限 | CI 无法 E2E | 不影响真机；CDP 冒烟方案已验证 |
+| 7 | **资产包批量（工作流 B）未实现** | 只能逐件生成 | Phase 2 |
 

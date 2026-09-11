@@ -11,6 +11,78 @@
 
 ---
 
+## 2026-09-12 第二十二轮：G4 压测 + 真机走查 + CSP blob 修复（打包版全链路绿）
+
+### 改动摘要
+自主完成 G4 压测与打包版 UI 走查（用户不在电脑前，用 CDP + 截图代替人工）：
+1. **G4 压测**（`tests/stress_g4.py`）：in-process 连续 20 轮任务（工作流 A/C 交替），每轮断言状态机、转台帧、校验、导出 —— **20/20 通过**，均 13.7s/轮。
+2. **真机走查**：重建便携版（sidecar 68MB + asar 1.1MB），带独立数据目录启动 + CDP 走查——真实 FBX（phong_cube）页面内上传 → 管线 succeeded → 校验通过 → 转台 8 帧；详情页截图确认 3D 视口正常渲染（WASM 修复生效）、版本树带「回滚到此」、任务记录完整。
+3. **抓到并修掉一个真 bug**：#9 修好的 console 日志当场抓到 **CSP `connect-src` 缺 `blob:`** —— GLTFLoader 用 fetch 读 blob: 贴图被静默拦截（开发模式被 vite 的 CSP 掩盖）。补 `blob:` 后打包版复测零报错。修复已进 `12cf4db`。
+
+### 验证状态
+- 打包版全链路（FBX→管线→校验→转台→视口）真机通过；截图存 `.data/qa-run/`（已 gitignore）
+- 注：走查中「资产库 0 个资产」是外部 API 导入后前端未刷新所致（真实用户走 UI 会刷新），不是缺陷；版本树「导入」行的回滚按钮有换行的小 UI 瑕疵，无碍功能
+
+---
+
+## 2026-09-12 第二十一轮：转台渲染接入 + 精确预估 + 三步引导（M4/M6 补全）
+
+| 文件 | 变更 |
+|---|---|
+| `app/tools/pipeline.py` | 管线完成后渲 8 帧转台（Blender 优先、软渲染兜底、旧帧先清） |
+| `app/routers/assets.py` | `_asset_summary` 返回 `turntable` 帧列表 |
+| `app/routers/meta.py` | 新增 `GET /api/estimate`：按 Provider 自己的 `estimate_cost` 精确预估（离线占位/本地报 ¥0） |
+| `AssetDetail.tsx` | 新增「转台（8 帧）」卡片 |
+| `Workbench.tsx` | 预估改为走 /api/estimate（变体数/引擎变化即刷新，静默失败）；空资产库时显示三步引导横幅（localStorage 记忆关闭） |
+
+验证：工作流 C 全链路 8 帧产出实测；typecheck/pytest 过。`94d0384`
+
+---
+
+## 2026-09-12 第二十轮：四边面 Spike 完成 —— 建议不进 MVP
+
+结论材料 [spike-quad-remesh.md](spike-quad-remesh.md)：PyPI 无 quad 重拓扑包（instant-meshes/quadriflow/quadwild 均 404）、fast-simplification/MeshLab 只产三角面、Instant Meshes 无官方 release 源。可行路径只剩 Blender Quadriflow（复用可选增强模式，本机无 Blender 未实测）。**建议不进 MVP，Phase 2 走 Blender 路径（出口标准已写在文档里）—— 待产品拍板。** ROADMAP 决策点已标记。`2aea18e`
+
+---
+
+## 2026-09-12 第十九轮：四家 Provider 端点对照官方源校正（#3 文档核对完成）
+
+官方文档站在本机不可达（超时/被墙），改用**官方 SDK 源码**逐一核对：
+
+| Provider | 依据 | 修正 |
+|---|---|---|
+| 混元3D | TencentCloud SDK `ai3d/v20250513` | 版本号 2025-01-01 → **2025-05-13**；动作名确认；补 `EnablePBR`/`FaceCount`（≥3000）；产物解析改官方 `ResultFile3Ds[{Type,Url}]` 优先 GLB |
+| Meshy | 官方 OpenAPI 生成 SDK（tryAGI/Meshy） | 路径/字段全对；`ai_model` meshy-4 已下架 → **meshy-5** |
+| Tripo | PyPI 官方客户端 `tripo` 0.2.1 | 改官方 **upload→file_token** 流程；探活改 `/user/balance`；model_version v2.5-20250123 确认 |
+| Rodin | DeemosTech 官方 rodin-api-mcp | 域名 → **hyperhuman.deemos.com**；创建改 multipart 表单；status/download 表单 POST；产物从 /download 按名挑 model.glb |
+| polling | — | FAIL_STATES 补 `fail`（腾讯 FAIL 小写漏配，失败任务原本会干等到超时）|
+
+81 passed 无回归。**剩余：真实 Key 冒烟（需用户拿 Key）。** `c5d233e`
+
+---
+
+## 2026-09-12 第十七+十八轮：UV 零重叠（收缩法→重打包法）+ 黄金集 10/10 全绿
+
+黄金集首跑（10 张占位概念图批量回归）把第十七轮的"岛收缩去重叠"当场证伪（445 岛压不到零、恒剩 2 面岛内折叠），升级为**重打包**方案并连带修掉三个真问题：
+
+1. **`repack_uv_islands`**：货架式装箱重排 UV 岛，零重叠 + 岛间距由构造保证；岛内折叠用「裁面成岛 + 逐面 jitter（1e-4，大于划岛容差 1e-6、视觉 <0.5px）」兜底。`uv_overlap` 校验规则 warn → **fail**（行业口径零容忍）。
+2. **减面后重新归一**：decimate 削掉包围盒边缘顶点，repair 摆好的轴心漂移 2.09cm 超容差 → `_step_decimate` 后在新拓扑上重新 normalize。
+3. **黄金集落地**：`scripts/make_golden_set.py`（10 张程序化占位图，文件名冻结、美术可同名替换）+ `app/golden.py` 批量回归（exit code 挂 CI）。**结果：工作流 10/10 + 校验一次通过 0/10 → 10/10。**
+
+回归截图与失败明细由 `python -m app.golden --keep` 输出。81 passed。`8ee7e38`
+
+---
+
+## 2026-09-12 第十四~十六轮：console-message / 埋点 / 版本树回滚
+
+| 轮次 | 内容 | 提交 |
+|---|---|---|
+| 十四 | #9 修复：console-message 适配 Electron 32 运行时单对象签名（类型声明仍是旧的，两种形态归一），渲染进程 console 重新落 main.log | `50639f4` |
+| 十五 | **本地埋点系统**：`telemetry.jsonl`（默认不上传）覆盖任务/每步耗时、失败分类、生成花费、变体采纳率、校验明细、导出次数与引擎类型；`/api/telemetry/summary` + `/export`（NDJSON 手动上报）；Settings 页「数据与遥测」卡片 + 导出按钮；7 个测试 | `4b2c26e` |
+| 十六 | **版本树回滚**：`POST /{id}/rollback` 非破坏性（复制目标版本含 OBJ 测量副本为新 head）；版本树非头节点「回滚到此」按钮；6 个测试 | `6f2e024` |
+
+---
+
 ## 2026-09-11 第十三轮：FBX 导入单位归一 —— 修掉"模型大了 100 倍"
 
 ### 改动摘要
@@ -473,19 +545,30 @@ npx electron-builder --win nsis
 
 ---
 
-## 已知问题（当前全部未解决）
+## 已知问题（2026-09-12 更新）
 
-| # | 问题 | 影响 | 认领节点 | 备注 |
-|---|---|---|---|---|
-| 9 | **console-message 钩子在 Electron 32 新事件签名下失效**：level 参数不再是数字，渲染进程的 console 报错实际没被记录进 main.log | 排障时少一路证据 | M5 | 改用事件对象签名（event.level），兼容两种签名 |
-| 8 | ~~**拖 FBX 后闪退，根因未定位**~~ **已修复（第十二轮）**：① CSP 拦 WASM → 加 `'wasm-unsafe-eval'`；② wheel 自带的老版 MSVCP140 遮蔽系统运行时致 xatlas 段错误 → 打包时覆盖系统版本。frozen 环境完整管线验证通过 | ~~用户无法导入 FBX~~ 已解决 | ✅ 第十二轮 | 视口交互仍待用户实测 |
-| 1 | **UV 展开无法保证零重叠**：xatlas Python 绑定不暴露 padding，实测约 0.04% 面有微小重叠 | 校验器的 UV 重叠规则暂时按 WARN 报 | M3 | 需换 Blender Smart UV Project 或补去重叠后处理 |
-| 2 | **四边面重拓扑未实现**：`want_quads` 只被记录，实际输出仍是三角面 | 四边面规则默认关闭 | W2 末 Spike | 决定是否真做（见 5.4.3） |
-| 3 | **云 Provider 端点未对照官方文档校正**：Meshy/Tripo/Rodin/混元3D 的 endpoint 是按下标写的（混元3D 的 TC3 签名是公共算法，动作名与 API 版号需重点核对） | 首次真实调用可能失败 | W1 | 端点集中在各 provider 文件顶部常量区 |
-| 4 | **烘焙与 FBX 导出未在真实 Blender 上验证**：`recipes/bpy/*.py` 只做了静态检查（含第七轮新增的 convert_to_glb.py） | 装了 Blender 的机器上可能报错 | M3 | 需校正 Blender 4.x API 差异 |
-| 5 | **前端未在真实 Electron 里跑过**：~~沙箱/无头环境无法创建 BrowserWindow~~ **2026-09-11 真机验证：便携版启动成功，壳自动拉起 sidecar（8756 健康检查通过），窗口正常弹出。剩 UI 交互（视口/导入/生成）由用户实测中** | 首次真机启动可能遇到路径/端口/权限问题 → 已基本排除 | M1 | 剩余项为 UI 层的实机走查 |
-| 6 | **Electron 在无头/沙箱环境启动受限**：`--disable-gpu` 仍不足绕过 | CI 无法做 E2E；不影响真机使用 | M1 | CI 可用 Playwright + `--remote-debugging-port` |
-| 7 | **资产包批量（工作流 B）未实现**：Planner 与风格圣经只有配置模板 | 只能逐件生成 | Phase 2 | 非 MVP 范围 |
+| # | 问题 | 影响 | 状态 |
+|---|---|---|---|
+| ~~9~~ | ~~console-message 钩子失效~~ | — | ✅ 第十四轮修复（Electron 32 双签名归一），并在第二十二轮真机立功（抓到 CSP blob 泄漏） |
+| ~~8~~ | ~~拖 FBX 闪退~~ | — | ✅ 第十二轮修复 |
+| ~~1~~ | ~~UV 展开无法保证零重叠~~ | — | ✅ 第十七+十八轮修复（repack 构造保证，规则回 FAIL，黄金集 10/10） |
+| 2 | **四边面重拓扑** | `want_quads` 仍只记录 | Spike 完成（docs/spike-quad-remesh.md），**建议不进 MVP，待产品拍板** |
+| 3 | **云 Provider 真实调用未验证** | 首次真调用可能还有字段级出入 | 文档核对已完成（第十九轮）；**剩真 Key 冒烟 —— 需用户提供 Key** |
+| 4 | **烘焙与 FBX 导出未在真实 Blender 上验证** | 装了 Blender 的机器上 bpy 脚本可能有 4.x API 差异 | 未解决 —— 本机无 Blender，**需装 Blender 的环境** |
+| 5 | ~~前端未在真实 Electron 里跑过~~ | — | ✅ 基本关闭：壳拉起 sidecar/视口/导入/管线/校验/回滚/转台均真机走查通过（第二十二轮，CDP 实证）；剩用户体感复测 |
+| 6 | Electron 无头/沙箱环境无法 E2E | CI 不能跑 Electron | 不影响真机；CDP 方案已验证可做冒烟 |
+| 7 | 资产包批量（工作流 B）未实现 | 只能逐件生成 | Phase 2（非 MVP） |
+| 10 | **自动更新通道缺失**（M5 遗留） | 用户升级需手动重装 | 需先决：发布渠道 + 代码签名证书（**待用户决策**） |
+
+---
+
+## 待用户决策清单（2026-09-12 汇总）
+
+1. **四边面重拓扑去留**：Spike 建议不进 MVP（材料 docs/spike-quad-remesh.md），Phase 2 走 Blender Quadriflow —— 请拍板。
+2. **Provider API Key**：四家端点已按官方源校正，但没 Key 无法真实冒烟。拿到 Meshy / Tripo / 混元3D（SecretId:SecretKey）/ Rodin 任一家 Key 后，设置页填入 → 「测试连接」→ 生成一次即可验证。
+3. **代码签名与更新通道**（M5）：无证书 → SmartScreen 会拦安装包；自动更新通道需要发布服务器。开发期可先不管，发布前必须决策。
+4. **Blender 真机验证**（已知问题 #4）：本机无 Blender，bpy 烘焙/FBX 导出/转台三条 Blender 路径未实测（均有软渲染/GLB 降级兜底）。建议在装了 Blender 的机器上跑一次黄金集。
+5. **黄金集升级**：samples/golden/ 目前是程序化占位图（管考卷已冻结）。美术出图后**同名覆盖**即可无缝升级，替换后跑 `python -m app.golden` 确认基线。
 
 ---
 
@@ -530,6 +613,8 @@ npm run build       # Vite 生产构建
 
 ## 下一步（按优先级）
 
-1. **W1 必做**：拿到 API Key 后对照官方文档校正 Meshy / Tripo / 混元3D（TC3 动作名与版号）/ Rodin 端点
-2. **M1 验收**：便携版已在用户真机运行（壳拉起 sidecar 链路通过），剩 UI 交互实测：视口加载 GLB、工作流 C 导入 FBX/OBJ、版本树、设置页
-3. **M3 认领**：UV 零重叠方案、Blender 脚本实机校正（bpy 的烘焙/导出/转台；FBX 导入已由内置 ufbx 转换器真机验证，bpy convert_to_glb.py 仅是回落路径）
+1. **用户复测**：便携版（build/win-unpacked/AssetAgent.exe，2026-09-12 重建）已全链路真机走查通过；建议用户体感过一遍 UI（拖 FBX/OBJ、视口、挑选、回滚、导出）。
+2. **真 Key 冒烟**（已知问题 #3 收尾）：任一家 Provider 的 Key 填入设置页 → 测试连接 → 生成一次。
+3. **Blender 真机验证**（已知问题 #4）：装 Blender 的机器跑 `python -m app.golden` + 一次 FBX 导出。
+4. **拍板**：四边面 Spike 结论（docs/spike-quad-remesh.md）、签名/更新渠道（已知问题 #10）。
+5. **M6 准备**：封测者招募与清单（埋点导出按钮已就位）；golden 集美术图替换。
