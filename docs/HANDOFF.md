@@ -11,6 +11,22 @@
 
 ---
 
+## 2026-09-11 第十三轮：FBX 导入单位归一 —— 修掉"模型大了 100 倍"
+
+### 改动摘要
+用户报"导进去的模型太大"。实测导入节点尺寸 100 × 50 × 70 —— FBX 内部单位是厘米（空气球桌真实尺寸 1m × 0.5m × 0.7m，完全合理），ufbx2obj 转换时没做单位归一，厘米原样进了 GLB（引擎标准是米）。管线的 repair 步虽有 normalize_transform（按规格缩到期望尺寸），最终输出其实是标准的，但导入节点本身就是错的，美术在版本树里一看到导入版本就是巨大的。
+
+### 修复
+`native/fbx2obj.c`：`ufbx_load_opts` 设 `target_unit_meters = 1.0f` + `target_axes = ufbx_axes_right_handed_y_up`（GLB 规范要求 Y-up 右手系）。ufbx 把单位/轴向换算烘焙进 `node->geometry_to_world`，现有的变换代码无需感知。附带收益：Z-up 来源（3ds Max 等）的文件也会被归一到 Y-up，不会侧躺。
+
+### 验证状态
+- 本机转换实测：100 × 50 × 70 → **1.0 × 0.5 × 0.7** ✓
+- 打包版 sidecar 实测：导入节点即 1.0 × 0.5 × 0.7 ✓
+- 便携版重建并打开
+- 注：repair 的 normalize_transform 保留不动 —— 它的语义是"按规格期望尺寸缩放"（spec.expected_size_m），与单位归一是两件事
+
+---
+
 ## 2026-09-11 第十二轮：FBX 导入闪退根因修复 —— 双凶手（CSP 拦 WASM + 老版 VC 运行时段错误）
 
 ### 改动摘要

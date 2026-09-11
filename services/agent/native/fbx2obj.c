@@ -45,7 +45,13 @@ int main(int argc, char **argv) {
     const char *out_path = argv[2];
 
     ufbx_error error;
-    ufbx_scene *scene = ufbx_load_file(in_path, NULL, &error);
+    // 引擎标准姿态：米制 + Y-up 右手系（GLB 规范要求 Y-up）。
+    // FBX 内部单位随来源变化（常见厘米），不转换的话导入的模型会大 100 倍；
+    // ufbx 把单位/轴向换算烘焙进 node->geometry_to_world，下面的变换代码无需感知。
+    ufbx_load_opts opts = {0};
+    opts.target_unit_meters = 1.0f;
+    opts.target_axes = ufbx_axes_right_handed_y_up;
+    ufbx_scene *scene = ufbx_load_file(in_path, &opts, &error);
     if (!scene) {
         char buf[1024];
         ufbx_format_error(buf, sizeof(buf), &error);
