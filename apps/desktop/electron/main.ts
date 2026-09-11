@@ -98,11 +98,22 @@ function createWindow(): BrowserWindow {
   wc.on('did-fail-load', (_event, code, desc, url) => {
     log('main', `did-fail-load: code=${code} desc=${desc} url=${url}`);
   });
-  wc.on('console-message', (_event, level, message, line, sourceId) => {
-    // level: 1=info 2=warning 3=error；info 太吵不记
-    if (level >= 2) {
-      log('main', `renderer console[level=${level}]: ${message} (${sourceId}:${line})`);
-    }
+  // Electron 32 起（.d.ts 未跟上）运行时改传单对象 details：
+  // { level: 'info'|'warning'|'error', message, lineNumber, sourceId, frame }；
+  // 旧签名是 (event, level: 1..3, message, line, sourceId)。两种形态都归一处理。
+  wc.on('console-message', (...args: unknown[]) => {
+    const second = args[1] as
+      | { level?: string | number; message?: string; lineNumber?: number; sourceId?: string }
+      | number
+      | undefined;
+    const isDetails = typeof second === 'object' && second !== null;
+    const lv = isDetails ? second.level : (second as number | undefined);
+    // verbose/info 太吵不记
+    if (lv !== 'error' && lv !== 'warning' && lv !== 2 && lv !== 3) return;
+    const text = String((isDetails ? second.message : args[2]) ?? '');
+    const line = Number((isDetails ? second.lineNumber : args[3]) ?? 0);
+    const sourceId = String((isDetails ? second.sourceId : args[4]) ?? '');
+    log('main', `renderer console[level=${String(lv)}]: ${text} (${sourceId}:${line})`);
   });
   window.on('closed', () => {
     log('main', '主窗口关闭');
