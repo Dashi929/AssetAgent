@@ -248,12 +248,24 @@ async def _step_decimate(mesh, spec: SpecPreset) -> tuple[Any, dict[str, Any]]:
 
 
 async def _step_uv(mesh) -> tuple[Any, dict[str, Any]]:
+    from .uv import deoverlap_uv
+
     unwrapped, report = await asyncio.to_thread(unwrap, mesh)
+    # 展开成功才需要去重叠：xatlas 不暴露 packing padding，岛间偶有微重叠，
+    # 收缩后处理把检测器口径压到零（见 uv.py deoverlap_uv）
+    deoverlap: dict[str, Any] = {}
+    if report.get("method") == "xatlas":
+        unwrapped, deoverlap = await asyncio.to_thread(deoverlap_uv, unwrapped)
+        report["uv_deoverlap"] = deoverlap
     return unwrapped, {
         "params": {"method": report.get("method")},
         "uv_islands": report.get("uv_islands"),
+        "uv_deoverlap": deoverlap,
         "skipped_reason": report.get("skipped_reason"),
-        "stats": {"uv_islands": report.get("uv_islands")},
+        "stats": {
+            "uv_islands": report.get("uv_islands"),
+            "uv_deoverlap_remaining": deoverlap.get("remaining"),
+        },
     }
 
 

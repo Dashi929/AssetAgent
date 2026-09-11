@@ -63,14 +63,93 @@ def unwrap(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, dict[str, Any]]:
     report["uv_islands"] = len(uv_islands(unwrapped))
     report["vertices"] = int(len(new_vertices))
     report["faces"] = int(len(new_faces))
-
-    # 展开质量自检：把重叠情况直接写进报告，让"UV 展开得怎么样"在任务记录里可见，
-    # 而不是等校验阶段才第一次暴露。
-    overlap = uv_overlap(unwrapped)
-    if overlap.get("computable"):
-        report["uv_overlap_faces"] = overlap.get("count", 0)
-        report["uv_overlap_ratio"] = overlap.get("ratio", 0.0)
     return unwrapped, report
+
+
+# ------------------------------------------------------------------ 去重叠后处理
+
+
+# 每轮收缩系数，从轻到重：先试探 1%，解决不了再加码。
+# 收缩会等比放大岛间距，等效于给 xatlas 的 packing 补上缺失的 padding。
+_SHRINK_SCHEDULE = (0.99, 0.985, 0.98, 0.97, 0.96, 0.95, 0.93, 0.90)
+
+
+def deoverlap_uv(
+    mesh: trimesh.Trimesh,
+    schedule: tuple[float, ...] = _SHRINK_SCHEDULE,
+) -> tuple[trimesh.Trimesh, dict[str, Any]]:
+    """去重叠后处理：把卷入重叠的 UV 岛向自身质心逐轮收缩，直到检测器报零。
+
+    xatlas 的 Python 绑定不暴露 packing 的 padding 参数，岛与岛之间偶尔贴得太近。
+    把**只卷入重叠**的岛向质心收缩一个小系数、同时把岛心略微推离重叠群中心，
+    等效于补上间距，而 UV 变形被限制在最小范围（正常岛一动不动）。
+
+    收缩到 uv_overlap() 报零为止；到系数上限仍剩重叠（如两岛 UV 完全同心的
+    病态布局，纯岛级变换原理上不可分）时如实返回 remaining，交校验规则处置。
+    """
+    uv = uv_array(mesh)
+    report: dict[str, Any] = {
+        "applied": False,
+        "iterations": 0,
+        "scales": [],
+        "remaining": None,
+        "remaining_ratio": None,
+    }
+    if uv is None:
+        report["reason"] = "该网格没有 UV，无需去重叠"
+        return mesh, report
+
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+
+    for factor in schedule:
+        overlap = uv_overlap(mesh)
+        if not overlap.get("computable"):
+            report["reason"] = overlap.get("reason", "重叠不可检测")
+            return mesh, report
+
+        count = int(overlap.get("count", 0))
+        if count == 0:
+            report["remaining"] = 0
+            report["remaining_ratio"] = 0.0
+            return mesh, report
+
+        overlap_faces = set(overlap.get("overlap_faces", []))
+        islands = uv_islands(mesh)
+        affected = [island for island in islands if overlap_faces.intersection(island.tolist())]
+        if not affected:
+            # 检测器报了重叠却归不出岛（理论上的边界情况）：不硬来，如实上报
+            report["remaining"] = count
+            report["remaining_ratio"] = overlap.get("ratio")
+            report["reason"] = "重叠面无法归属到任何 UV 岛"
+            return mesh, report
+
+        # 岛心沿"重叠群中心 → 自身"的方向略微外推：收缩腾出的空间不会被
+        # 相邻岛立刻吃回去，同心布局也多一层分离机会
+        centroids = []
+        for island in affected:
+            vertex_ids = np.unique(faces[island])
+            centroids.append(uv[vertex_ids].mean(axis=0))
+        center = np.mean(np.asarray(centroids), axis=0)
+
+        for island, centroid in zip(affected, centroids):
+            vertex_ids = np.unique(faces[island])
+            pushed = center + (centroid - center) * (1.0 + (1.0 - factor))
+            uv[vertex_ids] = pushed + (uv[vertex_ids] - centroid) * factor
+
+        if not isinstance(mesh.visual, trimesh.visual.texture.TextureVisuals):
+            mesh.visual = trimesh.visual.TextureVisuals(uv=uv)
+        else:
+            mesh.visual.uv = uv
+        report["applied"] = True
+        report["iterations"] += 1
+        report["scales"].append(factor)
+
+    # 系数用尽：如实报告剩余重叠（校验规则会按 FAIL 拦导出，由美术决定下一步）
+    overlap = uv_overlap(mesh)
+    if overlap.get("computable"):
+        report["remaining"] = int(overlap.get("count", 0))
+        report["remaining_ratio"] = overlap.get("ratio")
+    return mesh, report
 
 
 # ------------------------------------------------------------------ 分析
@@ -309,6 +388,7 @@ def _point_segment_distance(point: np.ndarray, a: np.ndarray, b: np.ndarray) -> 
 
 __all__ = [
     "MAX_BOUNDARY_SEGMENTS",
+    "deoverlap_uv",
     "unwrap",
     "uv_face_coords",
     "uv_island_margin_px",

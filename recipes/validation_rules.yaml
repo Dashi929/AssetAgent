@@ -51,13 +51,13 @@ defaults:
   # UV 重叠：0 个面
   # 依据：UV 重叠必然导致烘焙/光照图串色，标准即 0。
   #
-  # ⚠️ MVP 期间默认 warn 而不是 fail。原因：xatlas 在少数面（实测约 0.04%）上会产生
-  # 微小的 UV 重叠，而 xatlas 的 Python 绑定不暴露 padding 参数，管线暂时无法保证 0。
-  # 阈值仍然按标准写 0 —— 该报的问题照报，只是不阻断导出。
-  # 等 M3 把 UV 展开换成 Blender Smart UV Project 或补上去重叠后处理之后，改回 fail。
+  # 管线在展开后会跑"岛收缩去重叠"后处理（app/tools/uv.py deoverlap_uv），
+  # 逐轮把重叠岛向自身质心收缩，直到检测器报零为止 —— 所以这条按行业口径回到
+  # FAIL。极端情况下收缩到上限仍剩重叠时，版本 stats 里会记 uv_deoverlap.remaining，
+  # 本规则照常 FAIL，交美术决定（重跑/手动处理/忽略导出）。
   uv_overlap:
     enabled: true
-    severity: warn
+    severity: fail
     max_faces: 0
 
   # UV 岛间距：4K 贴图基准下 ≥ 2px
