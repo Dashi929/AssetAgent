@@ -44,10 +44,13 @@ class Settings(BaseSettings):
     meshy_api_key: str = ""
     tripo_api_key: str = ""
     rodin_api_key: str = ""
+    # 混元3D 凭据约定为 "SecretId:SecretKey"（冒号分隔），见 providers/hunyuan3d.py
+    hunyuan3d_api_key: str = ""
 
     meshy_base_url: str = "https://api.meshy.ai"
     tripo_base_url: str = "https://api.tripo3d.ai"
     rodin_base_url: str = "https://api.hyper3d.com"
+    hunyuan3d_base_url: str = "https://ai3d.tencentcloudapi.com"
 
     # ---- 成本 ----
     assetagent_cost_per_generation_cny: float = 2.5

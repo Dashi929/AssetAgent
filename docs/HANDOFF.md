@@ -10,6 +10,48 @@
 
 ---
 
+## 2026-09-11 第七轮：拍板落地 —— 混元3D Provider + FBX 导入 + 校验阈值定源
+
+### 改动摘要
+把 2026-09-11 的一批拍板决策落进代码与文档：3D Provider 三家自由可选（新增腾讯混元3D 适配器）、工作流 C 永久免费且导入支持 FBX、校验阈值从行业通行规范定源。产品定位改为 **AI-native**，人力排期口径作废。
+
+### 详细变更
+
+| 文件 | 变更 |
+|---|---|
+| `app/providers/hunyuan3d.py` | 新增。腾讯云混元生3D 适配器：TC3-HMAC-SHA256 请求签名（凭据约定 `SecretId:SecretKey`，冒号分隔）；自带 POST 版轮询（腾讯查询动作是 POST JSON，共用 `poll_task` 只支持 GET）；处理腾讯"HTTP 200 + Response.Error"的错误约定。**动作名与 API 版号是按文档写的，W1 拿 Key 后对照校正** |
+| `app/config.py` | 新增 `hunyuan3d_api_key` / `hunyuan3d_base_url`（默认 ai3d.tencentcloudapi.com） |
+| `app/providers/registry.py` | 注册混元3D；`PRIORITY` 改 `(meshy, tripo, hunyuan3d, rodin)`——三家自由可选，顺序只是无指定时的自动回落；错误文案同步 |
+| `recipes/bpy/convert_to_glb.py` | 新增。Blender headless：FBX→GLB。清空默认场景（`read_factory_settings(use_empty=True)`）、应用旋转/缩放、多对象 join |
+| `app/tools/convert.py` | 新增。`convert_to_glb()`：Blender 缺失 / 转换失败 / 没产出文件都抛 MeshError 人话 |
+| `app/routers/assets.py` | `MESH_SUFFIXES` 加 `.fbx`；import-mesh 里 FBX 先转 GLB 工作副本再建 import 版本节点（原始 FBX 留 source/ 只读，`params.converted_from` 记来源）；失败返回 400 并**归档资产**（不留 PROCESSING 僵尸）；工作流 C 注释标明永久免费 |
+| `app/tools/mesh_io.py` | `load_mesh` 对 .fbx 给"请走导入入口"的专门指引 |
+| `apps/desktop/src/pages/Workbench.tsx` | 导入 accept 加 `.fbx`，提示文案注明 fbx 需要本机 Blender |
+| `recipes/validation_rules.yaml` | **数值全部不变**，每条阈值补注行业依据（Unity 1u=1m、非 POT 无 mipmap；UE SM_ 前缀、1uu=1cm；UV 1–2 texel 硬下限 vs 烘焙建议 4–8px；标准道具 3k–10k 预算区间等），文件头声明"AI 从训练语料提取，上线前 TA 复核" |
+| `tests/test_hunyuan_import.py` | 新增 12 个测试：注册表成员与回落顺序、设置页出现混元3D、凭据切分（含 SecretKey 带冒号）、TC3 头结构、FBX 导入三路径（无 Blender 400+归档 / 转换失败带日志 / 成功走 GLB 工作副本）、convert 路径拼装、load_mesh 指引、recipes 定位不回归 |
+| `tests/conftest.py` + `tests/test_api.py` | `client` fixture 提升到 conftest 共享；conftest 顺手排除 `HUNYUAN3D_API_KEY` 环境变量 |
+| `产品策划文档.md` | 12 章重写为**拍板记录**：AI-native 定位、三家 Provider 自由可选、2D Provider 调研表（Scenario / PixelLab / Retro Diffusion / Meshy 贴图 / Layer）、工作流 C 免费、阈值定源、FBX 导入；Phase 2 三项挂起。9.2/9.3/9.4 同步（人力口径作废）、7.2/7.6/4.3 同步 |
+| `docs/ROADMAP.md` / `README.md` | 排期口径改 AI-native；决策点表两项标已拍板；provider 列表加混元3D；工作流 C 标免费 |
+
+### 拍板决策摘要（详见产品策划文档 12）
+
+1. **AI-native**：不绑人力规模，周次只表能力建设顺序
+2. **3D Provider**：Meshy / Tripo / 混元3D 自由可选，Rodin 保留兼容
+3. **2D**：贴图/sprite 切入，Phase 2 开工；接入顺序建议 Meshy 贴图（复用现有 Key）→ Scenario → 像素类
+4. **工作流 C 永久免费**（引流 + 校验器信任建设）
+5. **校验阈值**：行业规范提取（已写入 YAML），TA 复核是强化项不是阻塞项
+6. **导入格式**：支持 fbx / obj（本轮落地）
+7. Phase 2（商业模式 / 订阅定价 / 海外收款）挂起
+
+### 验证状态
+- `pytest tests`：**56 passed**（原 44 + 新增 12）
+- `ruff check app tests`：All checks passed
+- `npm run typecheck`：两个 tsconfig 均无错误
+- `python -m app.smoke`：全链路跑通，校验通过
+- **未验证（无前置条件）**：混元3D 真实调用（无 Key，与 Meshy/Tripo/Rodin 同属 W1 端点校正）；FBX 真机转换（本机无 Blender，错误路径与成功路径均已用 mock 测过）
+
+---
+
 ## 2026-09-11 第六轮：打包模式路径解析 + 应用图标
 
 ### 改动摘要
@@ -283,8 +325,8 @@ npx electron-builder --win nsis
 |---|---|---|---|---|
 | 1 | **UV 展开无法保证零重叠**：xatlas Python 绑定不暴露 padding，实测约 0.04% 面有微小重叠 | 校验器的 UV 重叠规则暂时按 WARN 报 | M3 | 需换 Blender Smart UV Project 或补去重叠后处理 |
 | 2 | **四边面重拓扑未实现**：`want_quads` 只被记录，实际输出仍是三角面 | 四边面规则默认关闭 | W2 末 Spike | 决定是否真做（见 5.4.3） |
-| 3 | **云 Provider 端点未对照官方文档校正**：Meshy/Tripo/Rodin 的 endpoint 是按下标写的 | 首次真实调用可能失败 | W1 | 端点集中在各 provider 文件顶部常量区 |
-| 4 | **烘焙与 FBX 导出未在真实 Blender 上验证**：`recipes/bpy/*.py` 只做了静态检查 | 装了 Blender 的机器上可能报错 | M3 | 需校正 Blender 4.x API 差异 |
+| 3 | **云 Provider 端点未对照官方文档校正**：Meshy/Tripo/Rodin/混元3D 的 endpoint 是按下标写的（混元3D 的 TC3 签名是公共算法，动作名与 API 版号需重点核对） | 首次真实调用可能失败 | W1 | 端点集中在各 provider 文件顶部常量区 |
+| 4 | **烘焙与 FBX 导出未在真实 Blender 上验证**：`recipes/bpy/*.py` 只做了静态检查（含第七轮新增的 convert_to_glb.py） | 装了 Blender 的机器上可能报错 | M3 | 需校正 Blender 4.x API 差异 |
 | 5 | **前端未在真实 Electron 里跑过**：代码已完成，但沙箱/无头环境无法创建 BrowserWindow | 首次真机启动可能遇到路径/端口/权限问题 | M1 | 在带显示器的开发机上验证 |
 | 6 | **Electron 在无头/沙箱环境启动受限**：`--disable-gpu` 仍不足绕过 | CI 无法做 E2E；不影响真机使用 | M1 | CI 可用 Playwright + `--remote-debugging-port` |
 | 7 | **资产包批量（工作流 B）未实现**：Planner 与风格圣经只有配置模板 | 只能逐件生成 | Phase 2 | 非 MVP 范围 |
@@ -332,7 +374,6 @@ npm run build       # Vite 生产构建
 
 ## 下一步（按优先级）
 
-1. **W0 前置**：团队规模（8 周 / 12 周口径）—— 需用户拍板
-2. **W1 必做**：拿到 API Key 后对照官方文档校正 Meshy/Tripo/Rodin 端点
-3. **M1 验收**：在带显示器的开发机上双击 `build/AssetAgent Setup 0.1.0.exe` 安装启动，验证 Electron 壳 → sidecar 跨进程链路（sidecar 路径已实测通过，剩壳层未验证）
-4. **M3 认领**：UV 零重叠方案、Blender 脚本实机校正
+1. **W1 必做**：拿到 API Key 后对照官方文档校正 Meshy / Tripo / 混元3D（TC3 动作名与版号）/ Rodin 端点
+2. **M1 验收**：在带显示器的开发机上双击 `build/AssetAgent Setup 0.1.0.exe` 安装启动，验证 Electron 壳 → sidecar 跨进程链路（sidecar 路径已实测通过，剩壳层未验证）
+3. **M3 认领**：UV 零重叠方案、Blender 脚本实机校正（含 convert_to_glb.py 的 FBX 真机转换验证）

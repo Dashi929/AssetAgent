@@ -22,7 +22,7 @@ def isolated_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("ASSETAGENT_ALLOW_MOCK_FALLBACK", "true")
     monkeypatch.setenv("ASSETAGENT_ROUTE_MODE", "byok")
     # 清掉可能从 .env 里读进来的真实 Key，测试不允许联网
-    for key in ("MESHY_API_KEY", "TRIPO_API_KEY", "RODIN_API_KEY"):
+    for key in ("MESHY_API_KEY", "TRIPO_API_KEY", "RODIN_API_KEY", "HUNYUAN3D_API_KEY"):
         monkeypatch.delenv(key, raising=False)
 
     from app.config import reset_settings_cache
@@ -32,6 +32,20 @@ def isolated_data_dir(tmp_path, monkeypatch):
     registry.reload()
     yield
     reset_settings_cache()
+
+
+@pytest.fixture
+def client():
+    """走真实 HTTP 语义的 TestClient。
+
+    with 语句会触发 lifespan（数据目录初始化、registry 装载）。
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 @pytest.fixture

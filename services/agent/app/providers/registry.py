@@ -13,14 +13,16 @@ from __future__ import annotations
 from ..config import Settings, get_settings
 from ..models import ProviderInfo
 from .base import Gen3DProvider, ProviderError
+from .hunyuan3d import Hunyuan3DProvider
 from .local_trellis import LocalTrellisProvider
 from .meshy import MeshyProvider
 from .mock import MockProvider
 from .rodin import RodinProvider
 from .tripo import TripoProvider
 
-# 按优先级排列：谁先有 Key 就用谁
-PRIORITY = ("meshy", "tripo", "rodin")
+# 2026-09-11 拍板（产品策划文档 12）：Meshy / Tripo / 混元3D 三家自由可选，
+# 这里只是用户没指定时的自动回落顺序；Rodin 保留在末位兼容存量配置。
+PRIORITY = ("meshy", "tripo", "hunyuan3d", "rodin")
 
 
 class ProviderRegistry:
@@ -48,6 +50,9 @@ class ProviderRegistry:
             MeshyProvider(settings.provider_key("meshy"), settings.meshy_base_url, mode),
             TripoProvider(settings.provider_key("tripo"), settings.tripo_base_url, mode),
             RodinProvider(settings.provider_key("rodin"), settings.rodin_base_url, mode),
+            Hunyuan3DProvider(
+                settings.provider_key("hunyuan3d"), settings.hunyuan3d_base_url, mode
+            ),
             LocalTrellisProvider(mode=mode),
             MockProvider(mode="mock"),
         ]
@@ -101,7 +106,7 @@ class ProviderRegistry:
             return self._providers["mock"]
 
         raise ProviderError(
-            "尚未配置任何生成引擎的 API Key。请到「设置 → BYOK」填写 Meshy / Tripo / Rodin 任意一家的 Key；"
+            "尚未配置任何生成引擎的 API Key。请到「设置 → BYOK」填写 Meshy / Tripo / 混元3D 任意一家的 Key；"
             "如果只是想先跑通后处理链路，可以打开「允许离线占位模式」。"
         )
 

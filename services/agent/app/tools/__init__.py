@@ -6,6 +6,7 @@
 
 from .blender import BlenderUnavailable
 from .blender import available as blender_available
+from .convert import convert_to_glb
 from .decimate import backend_name as decimate_backend
 from .decimate import decimate_mesh
 from .export import export_asset
@@ -22,6 +23,7 @@ __all__ = [
     "MeshError",
     "PipelineError",
     "blender_available",
+    "convert_to_glb",
     "decimate_backend",
     "decimate_mesh",
     "export_asset",

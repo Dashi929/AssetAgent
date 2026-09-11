@@ -33,12 +33,21 @@ from ..models import (
 )
 from ..presets import load_spec_presets
 from ..providers import GenerateRequest, ProviderError, registry
-from ..tools import export_asset, load_mesh, render_thumbnail, run_pipeline
+from ..tools import (
+    MeshError,
+    convert_to_glb,
+    export_asset,
+    load_mesh,
+    render_thumbnail,
+    run_pipeline,
+)
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
-MESH_SUFFIXES = {".glb", ".gltf", ".obj", ".ply", ".stl"}
+# .fbx 也在列：导入时经 Blender 转成 GLB 工作副本（tools/convert.py），
+# 管线与视口全程只见 GLB
+MESH_SUFFIXES = {".glb", ".gltf", ".obj", ".ply", ".stl", ".fbx"}
 
 
 # ------------------------------------------------------------------ 序列化
@@ -159,7 +168,7 @@ async def create_asset_from_mesh(
     name: str = Form("未命名资产"),
     preset_key: str = Form(""),
 ) -> dict[str, Any]:
-    """工作流 C 的入口：拖入任意来源的粗糙网格，只跑后处理，零 API 成本。"""
+    """工作流 C 的入口：拖入任意来源的粗糙网格，只跑后处理，零 API 成本、永久免费。"""
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in MESH_SUFFIXES:
         raise HTTPException(
@@ -180,6 +189,20 @@ async def create_asset_from_mesh(
         params={"source": str(target)},
         mesh_path=str(target),
     )
+
+    # FBX 没有纯 Python 的可靠读取方案，导入时经 Blender 转成 GLB 工作副本：
+    # 原始 FBX 留在 source/ 只读，管线与视口全程只见 GLB（见 tools/convert.py）
+    mesh_path = target
+    if suffix == ".fbx":
+        try:
+            mesh_path = convert_to_glb(target, store.version_dir(asset.id, node.id))
+        except MeshError as exc:
+            store.archive_asset(asset.id)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        node.params["converted_from"] = str(target)
+        node.label = "导入 FBX（已转 GLB 工作副本）"
+
+    node.mesh_path = str(mesh_path)
     store.add_version(node)
     store.patch_asset(asset.id, status=AssetStatus.PROCESSING)
     return _asset_summary(store.get_asset(asset.id))

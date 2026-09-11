@@ -20,15 +20,6 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app.main import app
-
-
-@pytest.fixture
-def client():
-    # with 语句会触发 lifespan（数据目录初始化、registry 装载）
-    with TestClient(app) as test_client:
-        yield test_client
-
 
 def make_png_bytes(size: int = 64) -> bytes:
     buffer = io.BytesIO()

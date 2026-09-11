@@ -139,7 +139,7 @@ export function Workbench() {
           <div className="hint">
             {mode === 'concept'
               ? '支持 png / jpg / webp，可多选（主视图 + 正/侧视图能明显提升质量）'
-              : '支持 glb / gltf / obj / ply / stl。任何来源的粗糙网格都能直接进来'}
+              : '支持 glb / gltf / obj / fbx / ply / stl。fbx 需要本机装有 Blender（自动转 GLB）'}
           </div>
           {pickedFiles.length > 0 && (
             <div style={{ marginTop: 10 }} className="mono">
@@ -151,7 +151,7 @@ export function Workbench() {
             type="file"
             hidden
             multiple={mode === 'concept'}
-            accept={mode === 'concept' ? 'image/*' : '.glb,.gltf,.obj,.ply,.stl'}
+            accept={mode === 'concept' ? 'image/*' : '.glb,.gltf,.obj,.fbx,.ply,.stl'}
             onChange={onInputChange}
           />
         </div>
