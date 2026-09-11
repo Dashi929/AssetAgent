@@ -46,8 +46,9 @@ export async function resolveBaseUrl(): Promise<string> {
       /* 浏览器里开发时没有 bridge，走默认端口 */
     }
   }
-  cachedBaseUrl = 'http://127.0.0.1:8756';
-  return cachedBaseUrl;
+  // ⚠️ sidecar 还没就绪时不缓存 fallback：它的真实端口可能不是 8756
+  //（冲突上浮），等状态 ready 后下一次请求会重新解析并缓存正确的地址
+  return 'http://127.0.0.1:8756';
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -62,6 +63,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     });
   } catch (error) {
+    // 网络层失败：端口可能已经变了（sidecar 重启换端口），清掉缓存让下次重新解析
+    cachedBaseUrl = null;
     throw new ApiError(
       `连不上本地服务（${base}）。请确认 sidecar 已启动；如果反复失败，可在设置页查看日志。`,
       0,

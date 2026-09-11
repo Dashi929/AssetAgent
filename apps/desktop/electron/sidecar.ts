@@ -29,18 +29,30 @@ export class SidecarManager {
   private logFd: number | null = null;
   private status: SidecarStatus = { state: 'stopped', baseUrl: '' };
 
+  /** 状态每次变化都会回调（main 用来广播给所有窗口） */
+  onStatusChange: ((status: SidecarStatus) => void) | null = null;
+
   constructor(
     private readonly repoRoot: string,
     private readonly isDev: boolean,
     private readonly logFile?: string,
   ) {}
 
+  private setStatus(next: SidecarStatus): void {
+    this.status = next;
+    try {
+      this.onStatusChange?.(next);
+    } catch {
+      /* 回调异常不影响 sidecar 管理 */
+    }
+  }
+
   getStatus(): SidecarStatus {
     return this.status;
   }
 
   async start(): Promise<SidecarStatus> {
-    this.status = { state: 'starting', baseUrl: '' };
+    this.setStatus({ state: 'starting', baseUrl: '' });
 
     const exec = this.resolveExecutable();
     if (!exec) {
@@ -93,12 +105,12 @@ export class SidecarManager {
       this.writeLog(`---- sidecar 退出 code=${code} signal=${signal ?? '-'} ----\n`);
       this.closeLog();
       if (this.status.state !== 'stopped') {
-        this.status = {
+        this.setStatus({
           ...this.status,
           state: 'failed',
           message: `sidecar 进程意外退出（退出码 ${code}）`,
           logTail: this.tail(),
-        };
+        });
       }
       this.child = null;
     });
@@ -108,12 +120,12 @@ export class SidecarManager {
       return this.fail('sidecar 启动超时（60 秒内没有响应健康检查）');
     }
 
-    this.status = { state: 'ready', baseUrl, pythonPath: exec.path };
+    this.setStatus({ state: 'ready', baseUrl, pythonPath: exec.path });
     return this.status;
   }
 
   stop(): void {
-    this.status = { ...this.status, state: 'stopped' };
+    this.setStatus({ ...this.status, state: 'stopped' });
     if (!this.child) {
       this.closeLog();
       return;
@@ -134,7 +146,7 @@ export class SidecarManager {
   }
 
   private fail(message: string): SidecarStatus {
-    this.status = { ...this.status, state: 'failed', message, logTail: this.tail() };
+    this.setStatus({ ...this.status, state: 'failed', message, logTail: this.tail() });
     return this.status;
   }
 

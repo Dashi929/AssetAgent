@@ -19,6 +19,14 @@ const repoRoot = isDev ? path.resolve(__dirname, '..', '..', '..') : process.res
 const sidecar = new SidecarManager(repoRoot, isDev, path.join(logsDir(), 'sidecar.log'));
 let mainWindow: BrowserWindow | null = null;
 
+// sidecar 状态每次变化都广播给所有窗口（渲染进程可能随时重载，不能只推一次）
+sidecar.onStatusChange = (status) => {
+  log('main', `sidecar 状态：state=${status.state} baseUrl=${status.baseUrl} message=${status.message ?? '-'}`);
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('sidecar:status', status);
+  }
+};
+
 function pageUrl(): string {
   return isDev
     ? 'http://127.0.0.1:5173'
@@ -109,11 +117,15 @@ function createWindow(): BrowserWindow {
 async function bootstrap(): Promise<void> {
   mainWindow = createWindow();
 
+  // 状态变化的广播由 onStatusChange 统一发；这里只负责拉起
   const status = await sidecar.start();
   log('main', `sidecar 启动结果：state=${status.state} baseUrl=${status.baseUrl} ` +
     `message=${status.message ?? '-'}\n  logTail=${status.logTail ?? '-'}`);
-  mainWindow.webContents.once('did-finish-load', () => {
-    mainWindow?.webContents.send('sidecar:status', status);
+
+  // 持久监听（不能用 once）：页面加载常常比 sidecar 启动快，
+  // 加载完成时把当前状态补发给前端，避免前端永远停在"连不上"
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow?.webContents.send('sidecar:status', sidecar.getStatus());
   });
 
   if (status.state === 'failed') {

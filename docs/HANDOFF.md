@@ -11,6 +11,30 @@
 
 ---
 
+## 2026-09-11 第十轮：修复"连不上本地服务" —— 状态推送竞态 + 端口缓存
+
+### 改动摘要
+用户报"连不上本地服务（8756）"。日志勘查发现 sidecar 实际健康运行在 8756（curl 正常），问题在前端**永远收不到 sidecar 状态**：main.ts 用 `once('did-finish-load')` 推送状态，而页面加载（~1s）比 sidecar 启动（~4s）快，推送注册时事件早已发过；且 client.ts 把 8756 fallback **永久缓存**，sidecar 就绪后也不会重解析。
+
+### 修复内容
+
+| 文件 | 变更 |
+|---|---|
+| `electron/sidecar.ts` | 新增 `onStatusChange` 回调，状态每次变化（starting/ready/failed/stopped）都触发；所有赋值点收拢到 `setStatus()` |
+| `electron/main.ts` | ① `onStatusChange` → 广播给所有窗口（渲染进程可能随时重载）；② `once('did-finish-load')` 改为**持久 `on`**，加载完成时补发当前状态 |
+| `src/api/client.ts` | ① sidecar 未就绪时 fallback 8756 **不再缓存**（就绪后下次请求重解析出真实端口）；② 网络层失败时清空已缓存端口（sidecar 重启换端口后能自愈） |
+| `src/store/useAppStore.ts` | `init()` 加轮询兜底：每 1.5s 查一次状态直到 ready（最多 60 次），与 IPC 推送双保险 |
+
+### 教训
+"窗口加载快于后端启动"是桌面应用特有的竞态，web 端不会遇到。任何"只推一次"的初始化状态在 Electron 里都必须假设渲染进程会在任意时刻（重）加载。
+
+### 验证状态
+- typecheck 通过；便携版重建并打开
+- main.log 实测显示完整状态生命周期：`starting` 广播 → `ready` 广播 → 启动结果，sidecar 健康在 8756
+- 待用户复测：界面应正常进入工作台，可拖 FBX
+
+---
+
 ## 2026-09-11 第九轮：闪退排障日志系统（三进程全链路）
 
 ### 改动摘要

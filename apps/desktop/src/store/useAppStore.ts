@@ -53,9 +53,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   async init() {
     const bridge = window.assetagent;
     if (bridge) {
-      const status = await bridge.getSidecarStatus();
-      set({ sidecar: status });
       bridge.onSidecarStatus((next) => set({ sidecar: next }));
+      const poll = async (): Promise<boolean> => {
+        try {
+          const status = await bridge.getSidecarStatus();
+          set({ sidecar: status });
+          return status.state === 'ready';
+        } catch {
+          return false;
+        }
+      };
+      await poll();
+      // IPC 推送有竞态（页面加载可能早于 sidecar 就绪），轮询兜底直到 ready
+      let tries = 0;
+      const timer = setInterval(async () => {
+        tries += 1;
+        if ((await poll()) || tries > 60) clearInterval(timer);
+      }, 1500);
     }
     await get().handle(async () => {
       await Promise.all([get().refreshAssets(), get().refreshPresets(), get().refreshSettings()]);
