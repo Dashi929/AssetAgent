@@ -69,87 +69,173 @@ def unwrap(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, dict[str, Any]]:
 # ------------------------------------------------------------------ 去重叠后处理
 
 
-# 每轮收缩系数，从轻到重：先试探 1%，解决不了再加码。
-# 收缩会等比放大岛间距，等效于给 xatlas 的 packing 补上缺失的 padding。
-_SHRINK_SCHEDULE = (0.99, 0.985, 0.98, 0.97, 0.96, 0.95, 0.93, 0.90)
-
-
-def deoverlap_uv(
+def repack_uv_islands(
     mesh: trimesh.Trimesh,
-    schedule: tuple[float, ...] = _SHRINK_SCHEDULE,
+    margin_px: float = 6.0,
+    reference_resolution: int = 4096,
 ) -> tuple[trimesh.Trimesh, dict[str, Any]]:
-    """去重叠后处理：把卷入重叠的 UV 岛向自身质心逐轮收缩，直到检测器报零。
+    """UV 岛重打包 —— "零重叠 + 岛间距"由**构造**保证，不靠事后修补。
 
-    xatlas 的 Python 绑定不暴露 packing 的 padding 参数，岛与岛之间偶尔贴得太近。
-    把**只卷入重叠**的岛向质心收缩一个小系数、同时把岛心略微推离重叠群中心，
-    等效于补上间距，而 UV 变形被限制在最小范围（正常岛一动不动）。
+    背景：xatlas 的 Python 绑定不暴露 packing 的 padding 参数，展开结果岛与岛
+    之间可能贴得太近甚至微重叠；先做的"岛收缩"修补法在真实网格（400+ 岛）上
+    压不到零 —— 岛多了收缩会互相挤压，嵌套/折叠布局原理上不可分。
 
-    收缩到 uv_overlap() 报零为止；到系数上限仍剩重叠（如两岛 UV 完全同心的
-    病态布局，纯岛级变换原理上不可分）时如实返回 remaining，交校验规则处置。
+    这里改为原则性方案：
+    1. 按 UV 连通性把面划分成岛（uv_islands）；
+    2. 每岛取 UV 包围盒，货架空式装箱重排进 [0,1]²（不旋转、不镜像）；
+    3. 岛与岛之间留 `margin_px / reference_resolution` 的空隙；
+    4. 放不下就整体等比缩小（各岛 texel 密度同比变化，相对密度不变），重试到放下。
+
+    **岛内折叠**（xatlas 参数化在同一 chart 内自交，重排管不了）的兜底：
+    检测出剩余重叠时，把重叠面从岛上**裁下来**（复制其 UV 顶点形成独立小岛），
+    再重排一次 —— 等价于美术在 DCC 里手工剪开 UV 缝，视觉影响可忽略。
+
+    margin 默认 6px@4096：岛间距规则硬下限是 2px@4096，取 3 倍余量给烘焙留空间。
     """
     uv = uv_array(mesh)
-    report: dict[str, Any] = {
-        "applied": False,
-        "iterations": 0,
-        "scales": [],
-        "remaining": None,
-        "remaining_ratio": None,
-    }
+    report: dict[str, Any] = {"applied": False, "remaining": None, "remaining_ratio": None}
     if uv is None:
-        report["reason"] = "该网格没有 UV，无需去重叠"
+        report["reason"] = "该网格没有 UV，无需重排"
         return mesh, report
 
     faces = np.asarray(mesh.faces, dtype=np.int64)
+    margin = float(margin_px) / float(reference_resolution)  # 单边留白（UV 单位）
 
-    for factor in schedule:
+    def _pack() -> tuple[np.ndarray, list[tuple[float, float, float, float]], list[tuple[float, float]], float] | None:
+        """当前岛划分下重排。返回 (islands, boxes, placements, scale)，放不下返回 None。"""
+        islands_ = uv_islands(mesh)
+        if len(islands_) == 0:
+            return None
+        boxes_: list[tuple[float, float, float, float]] = []
+        for island in islands_:
+            vertex_ids = np.unique(faces[island])
+            pts = uv[vertex_ids]
+            low = pts.min(axis=0)
+            size = np.maximum(pts.max(axis=0) - low, 0.0)
+            boxes_.append((float(low[0]), float(low[1]), float(size[0]), float(size[1])))
+
+        def try_pack(scale: float) -> list[tuple[float, float]] | None:
+            order = sorted(range(len(boxes_)), key=lambda i: boxes_[i][3] * scale, reverse=True)
+            placements_: list[tuple[float, float]] = [(0.0, 0.0)] * len(boxes_)
+            cursor_x = margin
+            row_bottom = margin
+            row_height = 0.0
+            for i in order:
+                _, _, w, h = boxes_[i]
+                iw, ih = w * scale, h * scale
+                if cursor_x + iw + margin > 1.0:
+                    cursor_x = margin
+                    row_bottom += row_height + margin
+                    row_height = 0.0
+                if cursor_x + iw + margin > 1.0 or row_bottom + ih + margin > 1.0:
+                    return None
+                placements_[i] = (cursor_x, row_bottom)
+                cursor_x += iw + margin
+                row_height = max(row_height, ih)
+            return placements_ if row_bottom + row_height + margin <= 1.0 else None
+
+        scale_ = 1.0
+        placements_ = try_pack(scale_)
+        while placements_ is None and scale_ > 0.05:
+            scale_ *= 0.92
+            placements_ = try_pack(scale_)
+        if placements_ is None:
+            return None
+        return islands_, boxes_, placements_, scale_
+
+    packed = _pack()
+    if packed is None:
+        report["reason"] = "UV 空间无法容纳当前岛集合（理论边界情况）"
+        return mesh, report
+    islands, boxes, placements, scale = packed
+
+    def _assign() -> None:
+        for island, (min_u, min_v, _, _), (slot_u, slot_v) in zip(islands, boxes, placements, strict=False):
+            vertex_ids = np.unique(faces[island])
+            uv[vertex_ids] = (
+                np.asarray([slot_u, slot_v]) + (uv[vertex_ids] - np.asarray([min_u, min_v])) * scale
+            )
+
+    _assign()
+    if not isinstance(mesh.visual, trimesh.visual.texture.TextureVisuals):
+        mesh.visual = trimesh.visual.TextureVisuals(uv=uv)
+    else:
+        mesh.visual.uv = uv
+
+    report.update(
+        applied=True,
+        method="shelf_repack",
+        islands=len(islands),
+        scale=round(scale, 4),
+        margin_px=margin_px,
+        reference_resolution=reference_resolution,
+    )
+
+    # 复核 + 岛内折叠兜底：把重叠面裁成独立小岛（逐轮换偏移基数），再重排
+    for round_index in range(3):
         overlap = uv_overlap(mesh)
         if not overlap.get("computable"):
             report["reason"] = overlap.get("reason", "重叠不可检测")
-            return mesh, report
-
-        count = int(overlap.get("count", 0))
-        if count == 0:
-            report["remaining"] = 0
-            report["remaining_ratio"] = 0.0
-            return mesh, report
-
-        overlap_faces = set(overlap.get("overlap_faces", []))
-        islands = uv_islands(mesh)
-        affected = [island for island in islands if overlap_faces.intersection(island.tolist())]
-        if not affected:
-            # 检测器报了重叠却归不出岛（理论上的边界情况）：不硬来，如实上报
-            report["remaining"] = count
-            report["remaining_ratio"] = overlap.get("ratio")
-            report["reason"] = "重叠面无法归属到任何 UV 岛"
-            return mesh, report
-
-        # 岛心沿"重叠群中心 → 自身"的方向略微外推：收缩腾出的空间不会被
-        # 相邻岛立刻吃回去，同心布局也多一层分离机会
-        centroids = []
-        for island in affected:
-            vertex_ids = np.unique(faces[island])
-            centroids.append(uv[vertex_ids].mean(axis=0))
-        center = np.mean(np.asarray(centroids), axis=0)
-
-        for island, centroid in zip(affected, centroids):
-            vertex_ids = np.unique(faces[island])
-            pushed = center + (centroid - center) * (1.0 + (1.0 - factor))
-            uv[vertex_ids] = pushed + (uv[vertex_ids] - centroid) * factor
-
+            break
+        remaining_faces = list(overlap.get("overlap_faces", []))
+        report["remaining"] = len(remaining_faces)
+        report["remaining_ratio"] = overlap.get("ratio")
+        if not remaining_faces:
+            break
+        mesh = _detach_faces(mesh, set(remaining_faces), offset_base=1e-4 * (1 + round_index))
+        uv = uv_array(mesh)
+        faces = np.asarray(mesh.faces, dtype=np.int64)  # 裁面后拓扑变了，闭包里的引用要跟着换
+        report["splits"] = int(report.get("splits", 0)) + len(remaining_faces)
+        packed = _pack()
+        if packed is None:
+            report["reason"] = "裁开重叠面后重排失败"
+            break
+        islands, boxes, placements, scale = packed
+        _assign()
         if not isinstance(mesh.visual, trimesh.visual.texture.TextureVisuals):
             mesh.visual = trimesh.visual.TextureVisuals(uv=uv)
         else:
             mesh.visual.uv = uv
-        report["applied"] = True
-        report["iterations"] += 1
-        report["scales"].append(factor)
+        report["islands"] = len(islands)
+        report["scale"] = round(scale, 4)
 
-    # 系数用尽：如实报告剩余重叠（校验规则会按 FAIL 拦导出，由美术决定下一步）
-    overlap = uv_overlap(mesh)
-    if overlap.get("computable"):
-        report["remaining"] = int(overlap.get("count", 0))
-        report["remaining_ratio"] = overlap.get("ratio")
     return mesh, report
+
+
+def _detach_faces(mesh: trimesh.Trimesh, face_ids: set[int], offset_base: float = 1e-4) -> trimesh.Trimesh:
+    """把指定面从 UV 岛上裁下来：复制这些面的角点顶点（位置+UV），面改引新顶点。
+
+    划岛按 UV **坐标**而不是顶点号 —— 只复制不挪坐标的话，裁下的面仍和原岛
+    同坐标、划不出去。所以每个面额外加一个各不相同、方向一致的微小偏移
+    （offset_base × 序号）：远大于划岛容差 1e-6（保证独立成岛），
+    远小于视觉可辨的尺度（1e-4 @4096 ≈ 0.4px）。几何不变（顶点位置原样复制）。
+    """
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    uv = uv_array(mesh)
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+
+    sources: list[int] = []
+    corners: list[tuple[int, int]] = []
+    jitters: list[float] = []
+    for j, f in enumerate(sorted(face_ids)):
+        shift = offset_base * (1 + j)
+        for k in range(3):
+            sources.append(int(faces[f, k]))
+            corners.append((int(f), k))
+            jitters.append(shift)
+    new_ids = np.arange(len(vertices), len(vertices) + len(sources))
+
+    new_vertices = np.vstack([vertices, vertices[sources]])
+    new_uv = np.vstack([uv, uv[sources]])
+    shift_rows = np.asarray(jitters, dtype=np.float64)[:, None]
+    new_uv[len(uv) :] += shift_rows
+    new_faces = faces.copy()
+    for (f, k), nid in zip(corners, new_ids, strict=False):
+        new_faces[f, k] = nid
+
+    out = trimesh.Trimesh(vertices=new_vertices, faces=new_faces, process=False)
+    out.visual = trimesh.visual.texture.TextureVisuals(uv=new_uv)
+    return out
 
 
 # ------------------------------------------------------------------ 分析
@@ -388,7 +474,7 @@ def _point_segment_distance(point: np.ndarray, a: np.ndarray, b: np.ndarray) -> 
 
 __all__ = [
     "MAX_BOUNDARY_SEGMENTS",
-    "deoverlap_uv",
+    "repack_uv_islands",
     "unwrap",
     "uv_face_coords",
     "uv_island_margin_px",

@@ -234,37 +234,47 @@ async def _step_repair(mesh, spec: SpecPreset) -> tuple[Any, dict[str, Any]]:
 
 
 async def _step_decimate(mesh, spec: SpecPreset) -> tuple[Any, dict[str, Any]]:
+    from .repair import normalize_transform
+
     decimated, report = await asyncio.to_thread(
         decimate_mesh, mesh, spec.face_budget, spec.want_quads
     )
-    return decimated, {
+    # 减面会削掉包围盒边缘的顶点，repair 阶段摆好的轴心/单位随之漂移
+    #（实测漂移可超轴心容差）—— 在减面后的新拓扑上重新归一一次
+    final, transform = await asyncio.to_thread(
+        normalize_transform, decimated, spec.pivot, spec.expected_size_m
+    )
+    renormalized = transform.get("actions", [])
+    return final, {
         "params": {"target_faces": spec.face_budget, "want_quads": spec.want_quads},
         "method": report.get("method"),
         "before_faces": report.get("before_faces"),
         "after_faces": report.get("after_faces"),
         "skipped_reason": report.get("skipped_reason"),
+        "renormalize": renormalized,
         "stats": {"after_faces": report.get("after_faces")},
     }
 
 
 async def _step_uv(mesh) -> tuple[Any, dict[str, Any]]:
-    from .uv import deoverlap_uv
+    from .uv import repack_uv_islands
 
     unwrapped, report = await asyncio.to_thread(unwrap, mesh)
-    # 展开成功才需要去重叠：xatlas 不暴露 packing padding，岛间偶有微重叠，
-    # 收缩后处理把检测器口径压到零（见 uv.py deoverlap_uv）
-    deoverlap: dict[str, Any] = {}
+    # 展开成功就重排 UV 岛：xatlas 不暴露 packing padding，岛间可能贴太近甚至微重叠。
+    # 重打包把"零重叠 + 岛间距"变成构造保证（见 uv.py repack_uv_islands）
+    repack: dict[str, Any] = {}
     if report.get("method") == "xatlas":
-        unwrapped, deoverlap = await asyncio.to_thread(deoverlap_uv, unwrapped)
-        report["uv_deoverlap"] = deoverlap
+        unwrapped, repack = await asyncio.to_thread(repack_uv_islands, unwrapped)
+        report["uv_repack"] = repack
     return unwrapped, {
         "params": {"method": report.get("method")},
         "uv_islands": report.get("uv_islands"),
-        "uv_deoverlap": deoverlap,
+        "uv_repack": repack,
         "skipped_reason": report.get("skipped_reason"),
         "stats": {
-            "uv_islands": report.get("uv_islands"),
-            "uv_deoverlap_remaining": deoverlap.get("remaining"),
+            "uv_islands": repack.get("islands") or report.get("uv_islands"),
+            "uv_repack_scale": repack.get("scale"),
+            "uv_overlap_remaining": repack.get("remaining"),
         },
     }
 

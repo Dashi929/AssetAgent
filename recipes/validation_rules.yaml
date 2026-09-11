@@ -51,9 +51,9 @@ defaults:
   # UV 重叠：0 个面
   # 依据：UV 重叠必然导致烘焙/光照图串色，标准即 0。
   #
-  # 管线在展开后会跑"岛收缩去重叠"后处理（app/tools/uv.py deoverlap_uv），
-  # 逐轮把重叠岛向自身质心收缩，直到检测器报零为止 —— 所以这条按行业口径回到
-  # FAIL。极端情况下收缩到上限仍剩重叠时，版本 stats 里会记 uv_deoverlap.remaining，
+  # 管线在展开后会跑"UV 岛重打包"后处理（app/tools/uv.py repack_uv_islands）：
+  # 岛间空隙由构造保证，"零重叠"与"岛间距"两条同时满足，所以这条按行业口径
+  # FAIL。极端情况（岛内折叠）复核仍剩重叠时，版本 stats 里记 uv_overlap_remaining，
   # 本规则照常 FAIL，交美术决定（重跑/手动处理/忽略导出）。
   uv_overlap:
     enabled: true
