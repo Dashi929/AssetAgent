@@ -1,0 +1,163 @@
+"""纯 Python 软件渲染器 —— 在没有 Blender 的机器上出转台图与缩略图。
+
+为什么需要它：MVP 的硬要求是"资产库有缩略图、变体挑选有转台图"，
+但 Blender 是可选依赖（包体 300MB，不是每个美术的机器上都装了）。
+用一个 z 排序 + Lambert 着色的软渲染顶上，画质比不上 bpy 渲染，
+但"够用来判断形状对不对"，而且零依赖、跑得快。
+
+Blender 存在时，render.py 会优先走 bpy。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import trimesh
+from PIL import Image, ImageDraw
+
+# 环境光下限：给 0.25 是为了在法线不一致的网格上也不会出现大片死黑
+AMBIENT = 0.25
+LIGHT_DIR = np.array([-0.45, -0.75, 0.5], dtype=np.float64)
+LIGHT_DIR /= np.linalg.norm(LIGHT_DIR)
+
+
+def _prepare(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """居中并归一化到单位尺寸，保证任何资产渲染出来构图一致。"""
+    prepared = mesh.copy()
+    low, high = prepared.bounds
+    prepared.apply_translation(-((low + high) / 2.0))
+    extent = float(np.max(high - low))
+    if extent > 1e-9:
+        prepared.apply_scale(1.0 / extent)
+    return prepared
+
+
+def _shade(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    """逐面 Lambert 着色系数，用绝对值避免法线不一致导致的黑块。"""
+    tri = vertices[faces]
+    normals = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    lengths = np.linalg.norm(normals, axis=1, keepdims=True)
+    lengths[lengths < 1e-12] = 1.0
+    normals = normals / lengths
+    lambert = np.abs(normals @ LIGHT_DIR)
+    return AMBIENT + (1.0 - AMBIENT) * lambert
+
+
+def _render_frame(
+    mesh: trimesh.Trimesh,
+    angle: float,
+    size: int,
+    background: tuple[int, int, int] = (247, 246, 243),
+    base_color: tuple[int, int, int] = (170, 168, 160),
+) -> Image.Image:
+    rotation = trimesh.transformations.rotation_matrix(angle, [0.0, 0.0, 1.0])
+    vertices = trimesh.transformations.transform_points(
+        np.asarray(mesh.vertices, dtype=np.float64), rotation
+    )
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    shades = _shade(vertices, faces)
+
+    # 正交投影：X→屏幕横轴，Z→屏幕纵轴（翻转使 +Z 朝上），Y→深度
+    margin = 0.08
+    scale = size * (1.0 - 2 * margin) / 2.0
+    center = size / 2.0
+    screen_x = center + vertices[:, 0] * scale
+    screen_y = center - vertices[:, 2] * scale
+    depth = vertices[:, 1]
+
+    order = np.argsort(depth[faces].mean(axis=1))[::-1]  # 远的先画
+
+    image = Image.new("RGB", (size, size), background)
+    draw = ImageDraw.Draw(image)
+    for face_index in order:
+        face = faces[face_index]
+        color = tuple(int(min(255, channel * shades[face_index])) for channel in base_color)
+        draw.polygon(
+            [
+                (screen_x[face[0]], screen_y[face[0]]),
+                (screen_x[face[1]], screen_y[face[1]]),
+                (screen_x[face[2]], screen_y[face[2]]),
+            ],
+            fill=color,
+        )
+    return image
+
+
+def render_turntable(
+    mesh: trimesh.Trimesh,
+    out_dir: Path,
+    stem: str = "turntable",
+    size: int = 512,
+    frames: int = 8,
+) -> list[Path]:
+    """渲 8 帧转台图，供人工挑选与后续 Critic 视觉通道使用。"""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prepared = _prepare(mesh)
+    paths: list[Path] = []
+    for index in range(max(1, frames)):
+        angle = 2.0 * np.pi * index / max(1, frames)
+        image = _render_frame(prepared, angle, size)
+        path = out_dir / f"{stem}_{index:02d}.png"
+        image.save(path)
+        paths.append(path)
+    return paths
+
+
+def render_thumbnail(
+    mesh: trimesh.Trimesh,
+    path: Path,
+    size: int = 256,
+    angle: float = np.pi * 0.25,
+) -> Path:
+    """单张缩略图，资产库网格用这个。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = _render_frame(_prepare(mesh), angle, size)
+    image.save(path)
+    return path
+
+
+def render_wireframe(
+    mesh: trimesh.Trimesh,
+    path: Path,
+    size: int = 512,
+    angle: float = np.pi * 0.25,
+) -> Path:
+    """线框预览 —— 看拓扑用的，比实心着色更能暴露三角面汤。"""
+    prepared = _prepare(mesh)
+    rotation = trimesh.transformations.rotation_matrix(angle, [0.0, 0.0, 1.0])
+    vertices = trimesh.transformations.transform_points(
+        np.asarray(prepared.vertices, dtype=np.float64), rotation
+    )
+    faces = np.asarray(prepared.faces, dtype=np.int64)
+
+    margin = 0.08
+    scale = size * (1.0 - 2 * margin) / 2.0
+    center = size / 2.0
+    screen_x = center + vertices[:, 0] * scale
+    screen_y = center - vertices[:, 2] * scale
+
+    image = Image.new("RGB", (size, size), (247, 246, 243))
+    draw = ImageDraw.Draw(image)
+    seen: set[tuple[int, int]] = set()
+    for face in faces:
+        for a in range(3):
+            b = (a + 1) % 3
+            key = (min(int(face[a]), int(face[b])), max(int(face[a]), int(face[b])))
+            if key in seen:
+                continue
+            seen.add(key)
+            draw.line(
+                [
+                    (screen_x[key[0]], screen_y[key[0]]),
+                    (screen_x[key[1]], screen_y[key[1]]),
+                ],
+                fill=(90, 88, 84),
+                width=1,
+            )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path)
+    return path
+
+
+__all__ = ["render_thumbnail", "render_turntable", "render_wireframe"]

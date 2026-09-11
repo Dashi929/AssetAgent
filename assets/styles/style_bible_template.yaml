@@ -1,0 +1,71 @@
+# 风格圣经模板
+#
+# 一个"风格包"就是一份可复用配置：同一套资产用同一个风格包生成，
+# 风格才可能一致 —— 这是"一个场景 20 件道具不会得到 20 种画风"的关键。
+#
+# 用法：复制本文件为 <style_id>.yaml 后填写。桌面端在生成时选中风格包，
+# 其中的 prompt 模板与参数会自动注入每一次生成请求。
+
+version: 1
+
+style_id: wasteland_outpost
+display_name: 荒漠废弃哨站
+description: 写实向、金属锈蚀与沙尘磨损，适合荒漠/废土题材的场景陈设
+
+# ---- 风格锚点 ----
+# 风格设定图：生成第一张后由美术确认，之后作为所有资产的参考图条件注入。
+# 这样整包资产的画风被"一张图"锁住，而不是靠每件都写一遍 prompt。
+reference_image: assets/styles/wasteland_outpost/reference.png
+reference_weight: 0.6
+
+# ---- prompt 模板 ----
+# {subject} 由 Planner 或美术填入，例如"带锁的铁皮工具箱"
+prompt_template: >
+  {subject}, post-apocalyptic wasteland style, weathered metal with rust and sand erosion,
+  realistic PBR materials, muted desaturated palette, game asset, isolated on neutral background
+
+negative_prompt: >
+  cartoon, cel shaded, bright saturated colors, glossy plastic, fantasy ornament,
+  character, creature, hands, text, watermark
+
+# ---- 生成参数 ----
+generation:
+  provider_preference: [meshy, tripo, rodin]
+  variants_per_asset: 3
+  texture_resolution: 2048
+  enable_pbr: true
+
+# ---- 资产规范（可覆盖规格预设）----
+spec_override:
+  category: prop
+  face_budget: 4000
+  target_engine: unreal
+  expected_size_m: 1.2
+  naming_pattern: "^SM_WastelandOutpost_[A-Za-z0-9_]+$"
+
+# ---- 后处理偏好 ----
+postprocess:
+  steps: [repair, decimate, uv, bake, validate]
+  bake_maps: [normal, ao]
+  pivot: bottom_center
+
+# ---- 资产包清单（工作流 B 用）----
+# 美术确认风格后，Planner 按这个清单逐件生成
+roster:
+  - subject: 带锁的铁皮工具箱
+    expected_size_m: 0.8
+  - subject: 生锈的油桶
+    expected_size_m: 0.9
+  - subject: 木质告示牌（风化）
+    expected_size_m: 1.6
+  - subject: 铁丝网栅栏段
+    expected_size_m: 2.4
+  - subject: 废弃发电机
+    expected_size_m: 1.4
+
+# ---- 跨会话复用 ----
+# 同风格包生成新资产时，历史规范（命名、面数、尺寸习惯）会自动注入，
+# 不需要美术每次重新交代一遍。
+notes: |
+  首批资产交付后，把实际用到的命名与面数习惯回填到 spec_override，
+  让风格包随时间收敛成"这个团队真正在用的标准"。

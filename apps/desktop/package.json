@@ -1,0 +1,74 @@
+{
+  "name": "assetagent-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AssetAgent 桌面端：把概念图变成引擎就绪的 3D 资产",
+  "author": "广州尼特之家信息技术有限公司",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n renderer,electron -c cyan,magenta \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on tcp:127.0.0.1:5173 && npm run build:electron && cross-env NODE_ENV=development electron .",
+    "build": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:all": "npm run build && npm run build:electron",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "lint": "eslint src electron --ext .ts,.tsx",
+    "start": "npm run build:all && electron .",
+    "dist": "npm run build:all && electron-builder"
+  },
+  "dependencies": {
+    "@react-three/drei": "^9.114.0",
+    "@react-three/fiber": "^8.17.10",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "three": "^0.169.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.169.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "concurrently": "^9.0.1",
+    "cross-env": "^7.0.3",
+    "electron": "^32.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.9",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "cn.nitehome.assetagent",
+    "productName": "AssetAgent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../../services/agent",
+        "to": "sidecar",
+        "filter": [
+          "**/*.py",
+          "!**/__pycache__/**",
+          "!**/tests/**"
+        ]
+      },
+      {
+        "from": "../../recipes",
+        "to": "recipes"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}

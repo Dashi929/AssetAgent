@@ -1,0 +1,99 @@
+# Game-ready 校验规则配置
+#
+# 三级回落：categories[类目] > defaults > 代码内置默认（app/tools/validate.py）。
+# 技术美术可以直接改这个文件调阈值，不用碰 Python —— 这是 T3 轨道的落点。
+#
+# severity 可选 fail / warn：warn 表示"报告里标黄，但不阻断导出"。
+
+version: 1
+
+defaults:
+  # 面数预算：Prop LOD0 默认 5000 三角面，类目可覆盖
+  face_budget:
+    enabled: true
+    severity: fail
+    max: 5000
+
+  # 四边面比例：硬表面 ≥ 85%
+  #
+  # ⚠️ MVP 期间默认关闭。原因：自动四边面重拓扑是全链路技术不确定性最高的一环，
+  # 是否真做要等 W1–W2 的 Spike 结论（见产品策划文档 5.4.3）。
+  # 在结论出来之前开着它，只会让每一份报告都挂一条我们知道但暂时解决不了的红灯，
+  # 反而让美术对整个校验器失去信任。Spike 通过后把 enabled 改回 true。
+  quad_ratio:
+    enabled: false
+    severity: fail
+    min: 0.85
+
+  # N-gon：0 个
+  ngon:
+    enabled: true
+    severity: fail
+    max: 0
+
+  # UV 重叠：0 个面
+  #
+  # ⚠️ MVP 期间默认 warn 而不是 fail。原因：xatlas 在少数面（实测约 0.04%）上会产生
+  # 微小的 UV 重叠，而 xatlas 的 Python 绑定不暴露 padding 参数，管线暂时无法保证 0。
+  # 阈值仍然按标准写 0 —— 该报的问题照报，只是不阻断导出。
+  # 等 M3 把 UV 展开换成 Blender Smart UV Project 或补上去重叠后处理之后，改回 fail。
+  uv_overlap:
+    enabled: true
+    severity: warn
+    max_faces: 0
+
+  # UV 岛间距：4K 贴图基准下 ≥ 2px
+  uv_island_margin:
+    enabled: true
+    severity: fail
+    min_px: 2.0
+    reference_resolution: 4096
+
+  # 轴心：底面中心
+  pivot:
+    enabled: true
+    severity: fail
+    mode: bottom_center
+    tolerance_m: 0.02
+
+  # 真实单位：米制，与规格期望尺寸偏差 ≤ ±5%
+  units:
+    enabled: true
+    severity: fail
+    unit: meter
+    tolerance_ratio: 0.05
+
+  # 命名：引擎规范正则
+  naming:
+    enabled: true
+    severity: fail
+    pattern: "^SM_[A-Za-z0-9_]+$"
+
+  # 贴图：分辨率必须是 2 的幂
+  # 默认 warn 而不是 fail：贴图规格不对是"要改"，不是"不能用"
+  texture:
+    enabled: true
+    severity: warn
+    power_of_two: true
+
+categories:
+  # 道具 / 场景陈设（主力类目）
+  prop: {}
+
+  # 关卡灰盒 Blocker：只求体块能进引擎，规范从宽
+  blocker:
+    face_budget:
+      max: 1500
+    uv_island_margin:
+      enabled: false      # 灰盒阶段不关心贴图
+    texture:
+      enabled: false
+    naming:
+      pattern: "^SM_Blocker_[A-Za-z0-9_]+$"
+
+  # 植被优化形态：面数预算更紧，允许三角形
+  foliage:
+    face_budget:
+      max: 2500
+    uv_island_margin:
+      min_px: 4.0

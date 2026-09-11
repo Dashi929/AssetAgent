@@ -1,0 +1,46 @@
+# 引擎导出预设
+#
+# 每个预设描述"这个引擎要什么样的资产"：坐标系、单位、格式、命名、贴图打包方式。
+# 管线按它导出，校验器按它判断命名是否符合规范。
+
+version: 1
+
+presets:
+  unity:
+    display_name: Unity
+    up_axis: Y
+    unit: meter
+    unit_scale: 1.0
+    formats: [glb, fbx]
+    naming:
+      mesh: "^SM_[A-Za-z0-9_]+$"
+      texture: "^T_[A-Za-z0-9_]+$"
+    texture:
+      # metallic-roughness → Unity Standard：metallic 进 R，smoothness 进 A
+      metallic_roughness: unity_standard
+    notes: "Y-up / 米制。FBX 导入时勾选 'Convert Units' 保持一致。"
+
+  unreal:
+    display_name: Unreal
+    up_axis: Z
+    unit: centimeter
+    unit_scale: 100.0
+    formats: [glb, fbx]
+    naming:
+      mesh: "^SM_[A-Za-z0-9_]+$"
+      texture: "^T_[A-Za-z0-9_]+$"
+    texture:
+      # ORM 打包：Occlusion→R，Roughness→G，Metallic→B
+      metallic_roughness: orm
+    notes: "Z-up / 厘米。FBX 是 UE 的首选格式；GLB 恒为 Y-up 米制，导入需手动调整。"
+
+  generic:
+    display_name: 通用 glTF
+    up_axis: Y
+    unit: meter
+    unit_scale: 1.0
+    formats: [glb]
+    naming: {}
+    texture:
+      metallic_roughness: gltf_native
+    notes: "glTF 原生 metallic-roughness，任何支持 glTF 的引擎/查看器都能直接吃。"

@@ -1,0 +1,67 @@
+# 资产规格预设 —— 工作台"选规格"下拉里的内容
+#
+# 每个预设是一份"交付契约"：管线会按它减面、按它摆轴心、按它校验。
+# 美术选中一个预设，就等于告诉管线"我要的是这个标准的东西"。
+
+version: 1
+
+presets:
+  prop_default:
+    name: 道具 · 默认
+    category: prop
+    face_budget: 5000
+    want_quads: true
+    target_engine: unity
+    unit_scale: 1.0
+    expected_size_m: 1.0
+    texture_resolution: 2048
+    pivot: bottom_center
+    naming_pattern: "^SM_[A-Za-z0-9_]+$"
+
+  prop_small:
+    name: 小道具（武器 / 器具）
+    category: prop
+    face_budget: 2500
+    want_quads: true
+    target_engine: unity
+    unit_scale: 1.0
+    expected_size_m: 0.4
+    texture_resolution: 2048
+    pivot: bottom_center
+    naming_pattern: "^SM_[A-Za-z0-9_]+$"
+
+  prop_large:
+    name: 大型陈设（箱柜 / 构件）
+    category: prop
+    face_budget: 8000
+    want_quads: true
+    target_engine: unreal
+    unit_scale: 1.0
+    expected_size_m: 2.5
+    texture_resolution: 4096
+    pivot: bottom_center
+    naming_pattern: "^SM_[A-Za-z0-9_]+$"
+
+  blocker:
+    name: 关卡灰盒 Blocker
+    category: blocker
+    face_budget: 1500
+    want_quads: false
+    target_engine: unreal
+    unit_scale: 1.0
+    expected_size_m: 4.0
+    texture_resolution: 1024
+    pivot: bottom_center
+    naming_pattern: "^SM_Blocker_[A-Za-z0-9_]+$"
+
+  foliage:
+    name: 植被优化形态
+    category: foliage
+    face_budget: 2500
+    want_quads: false
+    target_engine: unity
+    unit_scale: 1.0
+    expected_size_m: 3.0
+    texture_resolution: 2048
+    pivot: bottom_center
+    naming_pattern: "^SM_Foliage_[A-Za-z0-9_]+$"

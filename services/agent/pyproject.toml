@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "assetagent-sidecar"
+version = "0.1.0"
+description = "AssetAgent 本地 sidecar：3D 后处理管线、校验器、Provider 抽象层"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "广州尼特之家信息技术有限公司" }]
+
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "httpx>=0.27",
+  "python-multipart>=0.0.12",
+  "PyYAML>=6.0",
+  "numpy>=1.26",
+  "trimesh>=4.5",
+  "pillow>=11.0",
+  # trimesh 的连通分量分析需要 scipy（去孤立组件、组件计数）。
+  # 这不是可选项 —— "剔除游离组件"是修复步骤的核心能力，缺了它生成模型的
+  # 经典病（旁边飘着一小块）就治不了。scipy 比 networkx 快 5–10 倍，所以首选它。
+  "scipy>=1.14",
+  # 但 trimesh 的 fill_holes() 内部直接用 networkx.cycle_basis，scipy 替代不了。
+  # 补洞是硬表面资产的常规需求，所以 networkx 也必须在（纯 Python，体积很小）。
+  "networkx>=3.2",
+]
+
+[project.optional-dependencies]
+# 网格算法增强：装不上也不影响主流程（各步骤会自动降级并记录原因）
+mesh = [
+  "fast-simplification>=0.1.7",
+  "xatlas>=0.0.9",
+]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.8",
+  "httpx>=0.27",
+]
+
+[project.scripts]
+assetagent-smoke = "app.smoke:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+  "E501",   # 行宽由 formatter 管
+  "B008",   # FastAPI 的 Depends 默认值是惯用法
+  # 刻意用 `class X(str, Enum)` 而不是 StrEnum：pydantic 与 JSON 序列化都认这个写法，
+  # 而且它不依赖 3.11+ 的 StrEnum，将来若要把 sidecar 单独抽出去复用会更容易。
+  "UP042",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

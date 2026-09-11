@@ -1,0 +1,62 @@
+# ---- Node / Electron ----
+node_modules/
+dist/
+dist-electron/
+release/
+*.tsbuildinfo
+.eslintcache
+.vite/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# ---- 本地数据 / 产物（AssetAgent 运行时目录，永不入库）----
+.data/
+data/
+outputs/
+*.log
+!samples/**/*.log
+
+# ---- 用户私密配置（BYOK Key 绝不允许提交）----
+.env
+.env.*
+!.env.example
+**/secrets.json
+**/provider_keys.json
+
+# ---- Blender / DCC 临时文件 ----
+*.blend1
+*.blend2
+.blender/
+
+# ---- 系统 / 编辑器 ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# ---- AI 助手的工作记忆（内部记录，不属于产品源码）----
+.workbuddy-ai/
+.claude/
+
+# ---- 3D 产物（体积大，样例除外）----
+*.fbx
+*.glb
+*.gltf
+*.obj
+*.ply
+*.stl
+!samples/**/*.obj
+!samples/**/*.glb
+!samples/**/*.ply
