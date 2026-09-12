@@ -11,6 +11,38 @@
 
 ---
 
+## 2026-09-12 第二十九轮：工作台改造 —— 新建/导入分离 + 2D 素材 + 后台队列 + AI 属性编辑
+
+用户需求落地：新建（文字/图片 → LLM 生成 2D/3D）与导入（2D/3D 素材 → LLM 改属性）
+两个入口分离；都进资产库；详情页即预览/编辑模式；导入自动化 + 后台队列 + 完成通知跳转。
+
+| 组件 | 内容 |
+|---|---|
+| `Asset.kind` | model（3D）/ image（2D），贯穿 store/路由/前端；2D 资产缩略图 = 最新生成图或源图 |
+| `app/ai/imagegen.py` | 2D 图片生成适配器：CogView（与 LLM 同 Key 同平台），支持 b64/url 返回；config 加 imagegen_model |
+| `POST /api/assets/import` | **后台导入队列**：2D/3D 混合批量；3D 由 job 完成 FBX 转换+整条管线（失败资产标 failed 不留僵尸）；2D 校验后即 validated；不支持格式逐项报错 |
+| `POST /{id}/generate-image` | 2D 生成（LLM 优化提示词 → CogView → 版本节点 → validated）；3D 资产调用明确拒绝 |
+| `POST /{id}/ai-edit` | **LLM 属性编辑**：自然语言 → 白名单结构化变更（name/tags/notes/prompt/enhanced_prompt + spec 三项）→ 应用并返回前后对比；命名正则校验 |
+| 前端 Workbench | 两 tab：新建（素材类型 3D/2D 切换、概念图/描述/AI 优化）；导入（混合多选拖拽 + 后台进度列表 + 完成横幅 + 「查看/编辑」跳转） |
+| 前端 AssetDetail | 按 kind 分流：image 显示图片预览、隐藏管线/导出/转台/变体；AI 属性编辑卡片（指令 → 变更 JSON 展示 → openAsset 刷新） |
+| 埋点 | import_queue / generate_image / llm_edit |
+
+**关键实现坑（记给下个 Agent）**：
+- trimesh 的 `update_faces` 是"删除掩码"语义——传 (F,3) 新面数组会被当 fancy
+  index 产出 (F,3,3) 坐标数组污染网格（第二轮黑屏+顶点裂纹的元凶之一）。
+  翻转绕序等"改面"操作一律用 `mesh.faces = new_faces` setter。
+- `TextureVisuals(uv=uv)` 构造时 material 自动填 Material() 基类实例而非 None，
+  材质兜底判定不能写 `material is None`（见 mesh_io._sanitize_for_export）。
+- bash heredoc 写含 `
+` 的 Python 字符串会被 shell 折断——多行代码补丁改用
+  Write 工具写脚本文件执行。
+
+验证：106 passed（+11 导入队列/2D/ai-edit 测试）；打包版真机走查：
+新建/导入两 tab、混合导入（GLB+PNG）后台队列跑通（模型 job succeeded +
+校验完成、图片 validated）、资产库缩略图完好。`356df93`
+
+---
+
 ## 2026-09-12 第二十八轮：视口渲染发黑 + 顶点裂纹 —— 排查记（mushroom 视口复查）
 
 用户反馈：形状已正立但视口仍大片黑、部分顶点对不上。三个叠加根因 + 一个**流程坑**：
