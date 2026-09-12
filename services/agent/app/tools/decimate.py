@@ -68,6 +68,19 @@ def decimate_mesh(
             # trimesh 会顺带把 UV / 顶点法线 / 材质映射一起迁移到新拓扑上，
             # 直接调底层库会把这些属性丢掉。
             simplified = mesh.simplify_quadric_decimation(face_count=target_faces)
+            if _components_exploded(mesh, simplified):
+                # 多组件网格（扫描件/带大量装饰小件）整体减面会把小组件炸成
+                # 碎片（mushroom_house 实测 26 组件 → 3496 组件）。
+                # 回退：逐组件独立减面再合并；组件分析也失败则保留原网格并说明。
+                fallback = _decimate_per_component(mesh, target_faces)
+                if fallback is None:
+                    report["after_faces"] = before
+                    report["skipped_reason"] = (
+                        "多组件网格整体减面产生碎片，组件级回退也失败，已保留原几何。"
+                        "建议在 DCC 里先合并/清理组件后再减面。"
+                    )
+                    return mesh, report
+                simplified = fallback
         else:  # pymeshlab
             import pymeshlab
 
@@ -94,6 +107,47 @@ def decimate_mesh(
     report["method"] = name
     report["stats"] = mesh_stats(simplified)
     return simplified, report
+
+
+def _component_count(mesh: trimesh.Trimesh) -> int:
+    """连通组件数（body_count 只算邻接，不构建子网格，便宜）。算不动返回 -1。"""
+    try:
+        return int(mesh.body_count)
+    except Exception:
+        return -1
+
+
+def _components_exploded(before: trimesh.Trimesh, after: trimesh.Trimesh) -> bool:
+    """减面后组件数暴涨 = 小组件被炸成碎片（多组件网格的典型失败形态）。"""
+    before_count = _component_count(before)
+    after_count = _component_count(after)
+    if before_count < 0 or after_count < 0:
+        return False
+    return after_count > max(before_count * 2, 32)
+
+
+def _decimate_per_component(mesh: trimesh.Trimesh, target_faces: int) -> trimesh.Trimesh | None:
+    """逐组件独立减面再合并（按面数比例分配预算）。失败返回 None。"""
+    try:
+        parts = mesh.split(only_watertight=False, repair=False)
+    except Exception:
+        return None
+    if not parts:
+        return None
+    total = sum(len(p.faces) for p in parts)
+    if total == 0:
+        return None
+    decimated: list[trimesh.Trimesh] = []
+    for part in parts:
+        budget = max(4, round(target_faces * len(part.faces) / total))
+        if len(part.faces) <= budget:
+            decimated.append(part)
+            continue
+        try:
+            decimated.append(part.simplify_quadric_decimation(face_count=budget))
+        except Exception:
+            decimated.append(part)  # 单组件失败保留原样，不拖垮整体
+    return trimesh.util.concatenate(decimated)
 
 
 def backend_name() -> str:

@@ -28,6 +28,10 @@ def load_mesh(path: Path | str, process: bool = False) -> trimesh.Trimesh:
 
     process=False 是刻意的：我们要**如实**看到上游给的脏数据（退化面、游离组件、法线混乱），
     否则修复步骤就变成了自欺欺人 —— trimesh 默认会顺手清掉一部分问题。
+
+    .glb/.gltf 走自有解析器（app/tools/gltf_load.py）：trimesh 的 GLTF 节点变换解析
+    对「matrix 挂在父节点」的层级会整体错位（实测 Sketchfab 导出 26/26 节点全错），
+    这是导入渲染"炸裂"的根因，不能让它碰 GLB。
     """
     path = Path(path)
     if not path.exists():
@@ -41,6 +45,15 @@ def load_mesh(path: Path | str, process: bool = False) -> trimesh.Trimesh:
         raise MeshError(
             f"暂不支持 {path.suffix} 格式。支持：{'、'.join(sorted(SUPPORTED_EXTENSIONS))}"
         )
+
+    if path.suffix.lower() in {".glb", ".gltf"}:
+        from .gltf_load import load_glb
+
+        loaded = load_glb(path)
+        if len(loaded.faces) == 0:
+            raise MeshError("文件里没有可用的三角面。")
+        return loaded
+
     try:
         loaded = trimesh.load(path, force="mesh", process=process)
     except Exception as exc:

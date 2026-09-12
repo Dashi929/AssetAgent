@@ -51,20 +51,22 @@ def _render_frame(
     background: tuple[int, int, int] = (247, 246, 243),
     base_color: tuple[int, int, int] = (170, 168, 160),
 ) -> Image.Image:
-    rotation = trimesh.transformations.rotation_matrix(angle, [0.0, 0.0, 1.0])
+    rotation = trimesh.transformations.rotation_matrix(angle, [0.0, 1.0, 0.0])
     vertices = trimesh.transformations.transform_points(
         np.asarray(mesh.vertices, dtype=np.float64), rotation
     )
     faces = np.asarray(mesh.faces, dtype=np.int64)
     shades = _shade(vertices, faces)
 
-    # 正交投影：X→屏幕横轴，Z→屏幕纵轴（翻转使 +Z 朝上），Y→深度
+    # 正交投影：X→屏幕横轴，Y→屏幕纵轴（翻转使 +Y 朝上），Z→深度。
+    # up 轴必须是 Y：管线内部网格统一 Y-up（GLB / three.js 视口同款约定），
+    # 之前用 Z 当上轴，GLB 导入的模型在缩略图/转台里全是侧躺的。
     margin = 0.08
     scale = size * (1.0 - 2 * margin) / 2.0
     center = size / 2.0
     screen_x = center + vertices[:, 0] * scale
-    screen_y = center - vertices[:, 2] * scale
-    depth = vertices[:, 1]
+    screen_y = center - vertices[:, 1] * scale
+    depth = vertices[:, 2]
 
     order = np.argsort(depth[faces].mean(axis=1))[::-1]  # 远的先画
 

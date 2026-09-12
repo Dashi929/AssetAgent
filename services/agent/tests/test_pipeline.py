@@ -89,9 +89,9 @@ async def test_pipeline_normalizes_pivot_and_units(tmp_path):
     mesh = load_mesh(head.mesh_path)
     low, high = mesh.bounds
 
-    assert abs(float(low[2])) < 0.02, "底面没有贴地"
+    assert abs(float(low[1])) < 0.02, "底面没有贴地（Y-up）"
     assert abs(float((low[0] + high[0]) / 2)) < 0.02, "X 方向没有居中"
-    assert abs(float((low[1] + high[1]) / 2)) < 0.02, "Y 方向没有居中"
+    assert abs(float((low[2] + high[2]) / 2)) < 0.02, "Z 方向没有居中（Y-up：Y 是高度轴）"
     assert abs(float(max(high - low)) - 1.0) < 0.05, "最长边没有缩放到规格期望尺寸"
 
 

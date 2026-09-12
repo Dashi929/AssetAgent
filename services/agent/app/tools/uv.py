@@ -8,6 +8,7 @@ UV 是"美术会不会用这个资产"的分水岭之一，所以这里的分析
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import numpy as np
@@ -373,12 +374,16 @@ def _point_in_triangle(point: np.ndarray, tri: np.ndarray, margin: float = 0.0) 
     return a >= margin and b >= margin and c >= margin
 
 
-def uv_island_margin_px(mesh: trimesh.Trimesh, resolution: int) -> float | None:
+def uv_island_margin_px(mesh: trimesh.Trimesh, resolution: int, time_budget_s: float = 15.0) -> float | None:
     """UV 岛之间的最小间距，换算成像素。
 
     用岛边界线段之间的最小距离来算 —— 比"包围盒间距"准确得多，
     包围盒会把 L 形岛的凹口也算成间距，从而给出偏乐观的结论。
     算不动时返回 None（表示"测不了"），而不是返回一个假数字。
+
+    time_budget_s 是硬预算：岛对数是 O(岛数²)，而 xatlas 的布岛不带种子，
+    某些布局会把距离计算拖到分钟级（实测曾把管线"卡死"在 validate）——
+    超预算返回 None，校验规则按"测不了"跳过，绝不挂死管线。
     """
     coords = uv_face_coords(mesh)
     islands = uv_islands(mesh)
@@ -395,9 +400,12 @@ def uv_island_margin_px(mesh: trimesh.Trimesh, resolution: int) -> float | None:
     if len(segments_per_island) < 2 or total > MAX_BOUNDARY_SEGMENTS:
         return None
 
+    started = time.monotonic()
     best: float | None = None
     for i in range(len(segments_per_island)):
         for j in range(i + 1, len(segments_per_island)):
+            if time.monotonic() - started > time_budget_s:
+                return None
             distance = _segments_min_distance(segments_per_island[i], segments_per_island[j])
             if distance is not None and (best is None or distance < best):
                 best = distance

@@ -260,9 +260,10 @@ def _rule_pivot(ctx: ValidationContext) -> RuleResult:
     if mode != "bottom_center":
         return _skipped(rule, label, f"轴心模式「{mode}」暂未实现校验。", mode)
 
+    # Y-up 约定（与 repair 归一化、GLB/three.js 一致）：底面 = Y 最小值，XZ 居中
     low, high = bounds(ctx.mesh)
-    center_xy = (low[:2] + high[:2]) / 2.0
-    offset = float(np.max(np.abs(np.concatenate([center_xy, [low[2]]]))))
+    center_xz = (low[[0, 2]] + high[[0, 2]]) / 2.0
+    offset = float(np.max(np.abs(np.concatenate([center_xz, [low[1]]]))))
     ok = offset <= tolerance
     return RuleResult(
         rule=rule,
@@ -271,7 +272,7 @@ def _rule_pivot(ctx: ValidationContext) -> RuleResult:
         value=round(offset, 5),
         threshold=tolerance,
         message=(
-            f"底面中心偏差 {offset * 100:.2f}cm（X/Y 居中 + 底面贴地），"
+            f"底面中心偏差 {offset * 100:.2f}cm（X/Z 居中 + 底面贴地），"
             f"容差 ±{tolerance * 100:.2f}cm"
         ),
         locator=Locator(kind="none"),

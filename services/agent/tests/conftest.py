@@ -50,13 +50,13 @@ def client():
 
 @pytest.fixture
 def sample_obj(tmp_path):
-    """一个"干净"的样例资产：轴心在底面中心、最长边 1m、命名合规。"""
+    """一个"干净"的样例资产：轴心在底面中心（Y-up：底面贴 Y=0，XZ 居中）、命名合规。"""
     import trimesh
 
     mesh = trimesh.creation.icosphere(subdivisions=2, radius=0.5)
-    mesh.vertices[:, 2] -= mesh.vertices[:, 2].min()
     mesh.vertices[:, 0] -= (mesh.bounds[0][0] + mesh.bounds[1][0]) / 2
-    mesh.vertices[:, 1] -= (mesh.bounds[0][1] + mesh.bounds[1][1]) / 2
+    mesh.vertices[:, 2] -= (mesh.bounds[0][2] + mesh.bounds[1][2]) / 2
+    mesh.vertices[:, 1] -= mesh.vertices[:, 1].min()  # 底面贴 Y=0
     path = tmp_path / "SM_Test_Prop.obj"
     path.write_text(mesh.export(file_type="obj"), encoding="utf-8")
     return path

@@ -19,42 +19,54 @@ COMPONENT_FACE_RATIO = 0.10
 COMPONENT_VOLUME_RATIO = 0.01
 
 
-def _drop_stray_components(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, int]:
-    """保留主体，剔除游离小组件。返回 (mesh, 剔除数量)。"""
+def _drop_stray_components(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, int, str | None]:
+    """保留主体，剔除游离小组件。返回 (mesh, 剔除数量, 失败原因)。
+
+    用 face 邻接连通分量 + 面掩码筛选，**不构建子网格对象** —— 之前用
+    mesh.split()，在几万个组件的网格上直接内存爆炸（mushroom_house 实测），
+    而异常当年被静默吞掉，碎片原样流进减面被炸成"爆炸"渲染。
+    """
     try:
-        # repair=False 很关键：默认参数会让 trimesh 对每个分量尝试补洞，
-        # 那等于在"剔除组件"这一步偷偷改了每个组件的几何。剔除就该只做剔除。
-        try:
-            parts = mesh.split(only_watertight=False, repair=False)
-        except TypeError:
-            # 老版本 trimesh 没有 repair 参数
-            parts = mesh.split(only_watertight=False)
-    except Exception:
-        return mesh, 0
-    if len(parts) <= 1:
-        return mesh, 0
+        adjacency = mesh.face_adjacency
+        if len(adjacency) == 0:
+            return mesh, 0, None
+        components = trimesh.graph.connected_components(
+            adjacency, nodes=np.arange(len(mesh.faces)), min_len=1, engine="scipy"
+        )
+    except Exception as exc:
+        return mesh, 0, f"{type(exc).__name__}: {str(exc)[:120]}"
+    if len(components) <= 1:
+        return mesh, 0, None
 
-    main = max(parts, key=lambda m: len(m.faces))
-    main_faces = max(1, len(main.faces))
-    main_volume = _safe_volume(main)
+    main = max(components, key=len)
+    main_faces = max(1, len(main))
+    # 体积判据的近似：直接构建几千个子网格算封闭体积不可行（内存），
+    # 用组件包围盒对角线长度替代 —— 相对主体的比例语义不变（大小件判据）
+    main_points = mesh.vertices[np.unique(mesh.faces[main])]
+    main_extent = float(np.linalg.norm(main_points.max(axis=0) - main_points.min(axis=0)))
 
-    kept = [main]
-    for part in parts:
-        if part is main:
+    keep = np.zeros(len(mesh.faces), dtype=bool)
+    keep[main] = True
+    dropped = 0
+    for component in components:
+        if component is main or len(component) == 0:
             continue
-        face_ok = len(part.faces) / main_faces >= COMPONENT_FACE_RATIO
-        volume_ok = False
-        part_volume = _safe_volume(part)
-        if main_volume > 0 and part_volume > 0:
-            volume_ok = part_volume / main_volume >= COMPONENT_VOLUME_RATIO
-        if face_ok or volume_ok:
-            kept.append(part)
+        if len(component) / main_faces >= COMPONENT_FACE_RATIO:
+            keep[component] = True
+            continue
+        points = mesh.vertices[np.unique(mesh.faces[component])]
+        extent = float(np.linalg.norm(points.max(axis=0) - points.min(axis=0)))
+        if main_extent > 0 and extent / main_extent >= COMPONENT_VOLUME_RATIO ** (1 / 3):
+            keep[component] = True
+            continue
+        dropped += 1
 
-    dropped = len(parts) - len(kept)
-    if not kept:
-        return mesh, 0
-    merged = trimesh.util.concatenate(kept)
-    return merged, dropped
+    if dropped == 0:
+        return mesh, 0, None
+    working = mesh.copy()
+    working.update_faces(keep)
+    working.remove_unreferenced_vertices()
+    return working, dropped, None
 
 
 def _safe_volume(mesh: trimesh.Trimesh) -> float:
@@ -88,9 +100,11 @@ def repair_mesh(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, dict[str, Any]]
         report["actions"].append(f"清除重复面 {removed_duplicate} 个")
 
     # 3) 游离组件（生成模型的经典病：旁边飘着一小块）
-    working, dropped = _drop_stray_components(working)
+    working, dropped, split_failure = _drop_stray_components(working)
     if dropped:
         report["actions"].append(f"剔除游离组件 {dropped} 个")
+    if split_failure:
+        report["actions"].append(f"组件分析跳过（{split_failure}）")
 
     # 4) 未引用顶点
     before = len(working.vertices)
@@ -160,11 +174,11 @@ def normalize_transform(
                 low, high = working.bounds
                 extents = np.asarray(high - low, dtype=np.float64)
 
-    # 2) 轴心归一
+    # 2) 轴心归一（管线内部统一 Y-up —— GLB/three.js 的世界约定）
     if pivot == "bottom_center":
         low, high = working.bounds
         center = (np.asarray(low) + np.asarray(high)) / 2.0
-        offset = np.array([center[0], center[1], low[2]])
+        offset = np.array([center[0], low[1], center[2]])
         if float(np.max(np.abs(offset))) > 1e-6:
             working.apply_translation(-offset)
             actions.append("轴心移到包围盒底面中心")

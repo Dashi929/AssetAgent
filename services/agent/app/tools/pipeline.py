@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import shutil
 import time
@@ -39,6 +40,16 @@ from .uv import unwrap
 from .validate import summarize, validate
 
 logger = logging.getLogger("assetagent.pipeline")
+
+# 管线专用线程池：to_thread 的默认池与宿主（TestClient/uvicorn）共享，
+# 一旦外部任务占满就会出现"管线卡在 running"的偶发挂起，这里彻底隔离。
+_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="pipeline")
+
+
+async def _run_off_loop(fn, *args, **kwargs):
+    """把同步重活挪出事件循环，且只用自己的线程池。"""
+    return await asyncio.get_running_loop().run_in_executor(_POOL, lambda: fn(*args, **kwargs))
+
 
 DEFAULT_STEPS: list[JobStep] = [
     JobStep.REPAIR,
@@ -135,7 +146,7 @@ async def run_pipeline(
     store.patch_asset(asset_id, status=AssetStatus.PROCESSING)
     progress(0.02, f"读取输入网格：{source_path.name}")
 
-    mesh = await asyncio.to_thread(load_mesh, source_path)
+    mesh = await _run_off_loop(load_mesh, source_path)
     source_high_path = source_path
     summary: dict[str, Any] = {
         "asset_id": asset_id,
@@ -186,7 +197,7 @@ async def run_pipeline(
             node = _new_version(
                 asset_id, parent_id, STEP_OP[step], f"{step.value}", payload.get("params", {})
             )
-            await asyncio.to_thread(_write_version_mesh, current, node)
+            await _run_off_loop(_write_version_mesh, current, node)
             node.stats.update(payload.get("stats", {}))
             skipped = payload.get("skipped_reason")
             if skipped:
@@ -209,7 +220,7 @@ async def run_pipeline(
 
     # 缩略图（资产库网格用）
     thumb_dir = store.asset_dir(asset_id) / "thumbnails"
-    thumb = await asyncio.to_thread(
+    thumb = await _run_off_loop(
         render_tool.render_thumbnail, current, thumb_dir / "thumbnail.png", 256
     )
     summary["thumbnail"] = thumb.get("path")
@@ -219,7 +230,7 @@ async def run_pipeline(
     if turntable_dir.exists():
         shutil.rmtree(turntable_dir, ignore_errors=True)
     head = store.head_version(asset_id)
-    turntable = await asyncio.to_thread(
+    turntable = await _run_off_loop(
         render_tool.render_turntable,
         current,
         Path(head.mesh_path) if head else turntable_dir / "input.glb",
@@ -238,8 +249,8 @@ async def run_pipeline(
 
 
 async def _step_repair(mesh, spec: SpecPreset) -> tuple[Any, dict[str, Any]]:
-    repaired, report = await asyncio.to_thread(repair_mesh, mesh)
-    normalized, transform = await asyncio.to_thread(
+    repaired, report = await _run_off_loop(repair_mesh, mesh)
+    normalized, transform = await _run_off_loop(
         normalize_transform, repaired, spec.pivot, spec.expected_size_m
     )
     actions = list(report.get("actions", [])) + list(transform.get("actions", []))
@@ -253,12 +264,12 @@ async def _step_repair(mesh, spec: SpecPreset) -> tuple[Any, dict[str, Any]]:
 async def _step_decimate(mesh, spec: SpecPreset) -> tuple[Any, dict[str, Any]]:
     from .repair import normalize_transform
 
-    decimated, report = await asyncio.to_thread(
+    decimated, report = await _run_off_loop(
         decimate_mesh, mesh, spec.face_budget, spec.want_quads
     )
     # 减面会削掉包围盒边缘的顶点，repair 阶段摆好的轴心/单位随之漂移
     #（实测漂移可超轴心容差）—— 在减面后的新拓扑上重新归一一次
-    final, transform = await asyncio.to_thread(
+    final, transform = await _run_off_loop(
         normalize_transform, decimated, spec.pivot, spec.expected_size_m
     )
     renormalized = transform.get("actions", [])
@@ -276,12 +287,12 @@ async def _step_decimate(mesh, spec: SpecPreset) -> tuple[Any, dict[str, Any]]:
 async def _step_uv(mesh) -> tuple[Any, dict[str, Any]]:
     from .uv import repack_uv_islands
 
-    unwrapped, report = await asyncio.to_thread(unwrap, mesh)
+    unwrapped, report = await _run_off_loop(unwrap, mesh)
     # 展开成功就重排 UV 岛：xatlas 不暴露 packing padding，岛间可能贴太近甚至微重叠。
     # 重打包把"零重叠 + 岛间距"变成构造保证（见 uv.py repack_uv_islands）
     repack: dict[str, Any] = {}
     if report.get("method") == "xatlas":
-        unwrapped, repack = await asyncio.to_thread(repack_uv_islands, unwrapped)
+        unwrapped, repack = await _run_off_loop(repack_uv_islands, unwrapped)
         report["uv_repack"] = repack
     return unwrapped, {
         "params": {"method": report.get("method")},
@@ -305,10 +316,10 @@ async def _step_bake(mesh, high_path: Path, asset_id: str, spec: SpecPreset):
     work_dir = store.asset_dir(asset_id) / "work"
     work_dir.mkdir(parents=True, exist_ok=True)
     low_path = store.unique_path(work_dir, "low_for_bake.glb")
-    await asyncio.to_thread(save_mesh, mesh, low_path)
+    await _run_off_loop(save_mesh, mesh, low_path)
 
     out_dir = store.asset_dir(asset_id) / "textures"
-    report = await asyncio.to_thread(
+    report = await _run_off_loop(
         bake_tool.bake_textures,
         low_path,
         high_path,
@@ -340,7 +351,7 @@ async def _step_validate(
     if not measure_path.exists():
         raise PipelineError("管线内部错误：校验阶段找不到上游版本的网格文件。")
 
-    report: ValidationReport = await asyncio.to_thread(
+    report: ValidationReport = await _run_off_loop(
         validate,
         mesh,
         measure_path,
