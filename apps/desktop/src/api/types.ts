@@ -61,6 +61,8 @@ export interface Asset {
   picked_variant_id: string | null;
   head_version_id: string | null;
   prompt: string;
+  /** AI 助手按知识库优化过的描述（generate 时优先级低于用户手输 prompt） */
+  enhanced_prompt: string;
   notes: string;
   tags: string[];
   created_at: string;
@@ -172,6 +174,7 @@ export interface AssetSummary {
 }
 
 export interface AssetDetail extends AssetSummary {
+  semantic_checks?: SemanticCheck[];
   variants: Variant[];
   versions: VersionNode[];
   reports: ValidationReport[];
@@ -188,11 +191,37 @@ export interface SettingsSnapshot {
   blender_bin: string;
   data_dir: string;
   providers: ProviderInfo[];
+  llm: {
+    base_url: string;
+    model: string;
+    configured: boolean;
+    key_masked: string;
+  };
   usage: {
     month: string;
     this_month: { month: string; generations: number; cost: number };
     all_time: { month: null; generations: number; cost: number };
   };
+}
+
+/** AI 视觉校验结论（视觉 LLM：概念图 + 转台帧 → 吻合度）。 */
+export interface SemanticCheck {
+  id: string;
+  asset_id: string;
+  version_id: string | null;
+  passed: boolean;
+  score: number;
+  summary: string;
+  issues: { severity: 'high' | 'medium' | 'low'; message: string }[];
+  suggestions: string[];
+  created_at: string;
+}
+
+export interface EnhanceResult {
+  prompt: string;
+  keywords: string[];
+  negative_prompt: string;
+  rationale: string;
 }
 
 export interface Diagnostics {

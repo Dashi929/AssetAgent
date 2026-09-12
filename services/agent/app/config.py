@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     rodin_base_url: str = "https://hyperhuman.deemos.com"
     hunyuan3d_base_url: str = "https://ai3d.tencentcloudapi.com"
 
+    # ---- AI 助手（提示词优化 / 视觉校验，OpenAI 兼容协议） ----
+    llm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"  # 智谱开放平台，可换任何兼容服务
+    llm_model: str = "glm-4-flash"
+    llm_api_key: str = ""
+
     # ---- 成本 ----
     assetagent_cost_per_generation_cny: float = 2.5
     assetagent_monthly_budget_cny: float = 200.0

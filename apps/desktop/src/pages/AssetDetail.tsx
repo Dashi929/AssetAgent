@@ -19,13 +19,14 @@ import type { Locator, VersionNode } from '../api/types';
 export function AssetDetail() {
   const { assetId = '' } = useParams();
   const navigate = useNavigate();
-  const { detail, presets, job, openAsset, trackJob, clearJob, handle } = useAppStore();
+  const { detail, presets, job, openAsset, trackJob, clearJob, handle, settings } = useAppStore();
 
   const [activeVersionId, setActiveVersionId] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<number[]>([]);
   const [preset, setPreset] = useState('unity');
   const [allowFailedExport, setAllowFailedExport] = useState(false);
   const [exportResult, setExportResult] = useState<{ warnings: string[]; files: string[] } | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     void openAsset(assetId);
@@ -95,6 +96,16 @@ export function AssetDetail() {
       setHighlight([]);
       return true;
     });
+  };
+
+  const runVisualCheck = async () => {
+    setChecking(true);
+    try {
+      await handle(() => api.visualCheck(asset.id));
+      await openAsset(asset.id);
+    } finally {
+      setChecking(false);
+    }
   };
 
   const doExport = async () => {
@@ -213,6 +224,60 @@ export function AssetDetail() {
               </div>
             </div>
           )}
+
+          <div className="card">
+            <div className="row" style={{ marginBottom: 10 }}>
+              <h2 style={{ margin: 0 }}>AI 视觉校验</h2>
+              <span className="spacer" />
+              <button
+                onClick={runVisualCheck}
+                disabled={checking || !detail?.turntable?.length}
+                title={detail?.turntable?.length ? '视觉 LLM 用概念图 + 转台帧对照描述打分' : '先跑一次管线生成转台帧'}
+              >
+                {checking ? '校验中…' : '开始 AI 视觉校验'}
+              </button>
+            </div>
+            {settings?.llm.configured ? null : (
+              <div className="banner warn" style={{ marginTop: 0, marginBottom: 10 }}>
+                还没有配置 AI 助手（设置 → AI 助手），视觉校验不可用。
+              </div>
+            )}
+            {(detail?.semantic_checks?.length ?? 0) > 0 ? (
+              (() => {
+                const check = detail!.semantic_checks![detail!.semantic_checks!.length - 1];
+                return (
+                  <div>
+                    <div className="row" style={{ marginBottom: 6 }}>
+                      <span className={`badge ${check.passed ? 'pass' : 'fail'}`}>
+                        {check.passed ? '通过' : '未通过'} · {check.score} 分
+                      </span>
+                      <span className="muted">{new Date(check.created_at).toLocaleString()}</span>
+                    </div>
+                    <p style={{ marginTop: 0 }}>{check.summary}</p>
+                    {check.issues.length > 0 && (
+                      <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
+                        {check.issues.map((issue, i) => (
+                          <li key={i} className="muted">
+                            [{issue.severity}] {issue.message}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {check.suggestions.length > 0 && (
+                      <p className="muted" style={{ marginBottom: 0 }}>
+                        下次建议：{check.suggestions.join('；')}
+                      </p>
+                    )}
+                  </div>
+                );
+              })()
+            ) : (
+              <p className="muted" style={{ margin: 0 }}>
+                还没有校验记录。视觉 LLM 会拿概念图（如有）和转台渲染帧对照资产描述，
+                给出吻合度评分与问题清单。
+              </p>
+            )}
+          </div>
 
           {(detail?.turntable?.length ?? 0) > 0 && (
             <div className="card">

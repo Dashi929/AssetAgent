@@ -114,6 +114,7 @@ async def get_asset(asset_id: str) -> dict[str, Any]:
     detail["variants"] = [v.model_dump(mode="json") for v in store.list_variants(asset_id)]
     detail["versions"] = [v.model_dump(mode="json") for v in store.list_versions(asset_id)]
     detail["reports"] = [r.model_dump(mode="json") for r in store.list_reports(asset_id)]
+    detail["semantic_checks"] = [c.model_dump(mode="json") for c in store.list_semantic_checks(asset_id)]
     detail["exports"] = [e.model_dump(mode="json") for e in store.list_exports(asset_id)]
     detail["jobs"] = [j.model_dump(mode="json") for j in store.list_jobs(asset_id)]
     return detail
@@ -261,7 +262,7 @@ async def generate_variants(asset_id: str, body: GenerateBody) -> dict[str, Any]
     images = _image_sources(asset)
     # 既没有参考图也没有文字描述时，生成是没有依据的 —— 不管走哪家 Provider 都该拦下，
     # 而不是把一个空请求丢给 Provider 去炸（错误信息会难懂得多）。
-    if not images and not (body.prompt or asset.prompt).strip():
+    if not images and not (body.prompt or asset.enhanced_prompt or asset.prompt).strip():
         raise HTTPException(
             status_code=400,
             detail="这个资产还没有概念图，也没有文字描述，无法生成。请先上传参考图或填写描述。",
@@ -277,7 +278,8 @@ async def generate_variants(asset_id: str, body: GenerateBody) -> dict[str, Any]
             asset_id=asset_id,
             out_dir=batch_dir,
             image_paths=images,
-            prompt=body.prompt or asset.prompt,
+            # 用户手输 > AI 优化词 > 原始描述
+            prompt=body.prompt or asset.enhanced_prompt or asset.prompt,
             spec=asset.spec,
             num_variants=num_variants,
             on_progress=lambda p, message: progress(0.05 + p * 0.8, message),

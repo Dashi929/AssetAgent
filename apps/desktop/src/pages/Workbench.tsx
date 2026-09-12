@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import { useAppStore } from '../store/useAppStore';
 import JobProgress from '../components/JobProgress';
 
@@ -33,6 +33,8 @@ export function Workbench() {
   const [provider, setProvider] = useState('');
   const [pickedFiles, setPickedFiles] = useState<File[]>([]);
   const [estimateCny, setEstimateCny] = useState<number | null>(null);
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhanceInfo, setEnhanceInfo] = useState('');
   const [estimateProvider, setEstimateProvider] = useState('');
   const [showOnboarding, setShowOnboarding] = useState(
     () => localStorage.getItem(ONBOARDING_KEY) !== '1',
@@ -270,12 +272,35 @@ export function Workbench() {
 
         {mode === 'concept' && (
           <label style={{ display: 'block', marginTop: 12 }}>
-            <div className="muted">补充描述（可选，图为主文字为辅）</div>
+            <div className="muted">
+              补充描述（可选，图为主文字为辅）
+              <button
+                style={{ marginLeft: 8, padding: '1px 8px', fontSize: 12 }}
+                disabled={enhancing || !prompt.trim()}
+                title={prompt.trim() ? 'AI 按知识库优化这段描述' : '先输入一句描述'}
+                onClick={async () => {
+                  setEnhancing(true);
+                  try {
+                    const result = await api.enhancePromptPreview(prompt.trim(), activePresetKey);
+                    setPrompt(result.prompt);
+                    setEnhanceInfo(result.keywords.length ? `关键词：${result.keywords.join('、')}` : result.rationale);
+                  } catch (error) {
+                    setEnhanceInfo('');
+                    setError(error instanceof ApiError ? error.message : 'AI 优化失败，请稍后重试。');
+                  } finally {
+                    setEnhancing(false);
+                  }
+                }}
+              >
+                {enhancing ? '优化中…' : 'AI 优化描述'}
+              </button>
+            </div>
             <input
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="例如：写实风格、金属磨损质感"
             />
+            {enhanceInfo && <div className="muted" style={{ marginTop: 4 }}>{enhanceInfo}</div>}
           </label>
         )}
 

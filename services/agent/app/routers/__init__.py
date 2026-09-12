@@ -1,9 +1,10 @@
 """HTTP 接口层。"""
 
-from . import assets, files, jobs, meta, settings, telemetry
+from . import ai_assist, assets, files, jobs, meta, settings, telemetry
 
 ROUTERS = [
     assets.router,
+    ai_assist.router,
     jobs.router,
     settings.router,
     meta.router,
@@ -11,4 +12,4 @@ ROUTERS = [
     telemetry.router,
 ]
 
-__all__ = ["ROUTERS", "assets", "files", "jobs", "meta", "settings", "telemetry"]
+__all__ = ["ROUTERS", "ai_assist", "assets", "files", "jobs", "meta", "settings", "telemetry"]

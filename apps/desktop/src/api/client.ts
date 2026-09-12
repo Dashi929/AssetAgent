@@ -10,9 +10,11 @@ import type {
   AssetDetail,
   AssetSummary,
   Diagnostics,
+  EnhanceResult,
   ExportRecord,
   Job,
   PresetsResponse,
+  SemanticCheck,
   SettingsSnapshot,
   SpecPreset,
   TelemetrySummary,
@@ -210,6 +212,31 @@ export const api = {
 
   getTelemetrySummary: (month?: string) =>
     request<TelemetrySummary>(`/api/telemetry/summary${month ? `?month=${encodeURIComponent(month)}` : ''}`),
+
+  // ---------------------------------------------------------------- AI 助手
+
+  setLlmConfig: (patch: { base_url?: string; model?: string; key?: string }) =>
+    request<SettingsSnapshot>('/api/settings/llm', { method: 'PUT', body: JSON.stringify(patch) }),
+
+  testLlm: () => request<{ ok: boolean; message: string }>('/api/settings/llm/test', { method: 'POST' }),
+
+  /** 建资产前的预览优化（不落库）——工作台用；结果填回输入框可再编辑。 */
+  enhancePromptPreview: (description: string, presetKey: string) =>
+    request<EnhanceResult>('/api/assets/enhance-prompt-preview', {
+      method: 'POST',
+      body: JSON.stringify({ description, preset_key: presetKey }),
+    }),
+
+  /** 按知识库优化生成描述（结果落在 asset.enhanced_prompt，generate 自动优先使用）。 */
+  enhancePrompt: (assetId: string, description: string) =>
+    request<EnhanceResult>(`/api/assets/${assetId}/enhance-prompt`, {
+      method: 'POST',
+      body: JSON.stringify({ description }),
+    }),
+
+  /** 视觉 LLM 校验：概念图 + 转台帧 → 吻合度结论。 */
+  visualCheck: (assetId: string) =>
+    request<{ check: SemanticCheck }>(`/api/assets/${assetId}/visual-check`, { method: 'POST' }),
 
   /** 原始埋点 NDJSON 文本（用户手动导出上报用）。 */
   exportTelemetryRaw: async (month?: string): Promise<string> => {

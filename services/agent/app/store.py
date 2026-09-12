@@ -23,6 +23,7 @@ from .models import (
     ExportRecord,
     Job,
     JobStatus,
+    SemanticCheck,
     SpecPreset,
     ValidationReport,
     Variant,
@@ -302,6 +303,31 @@ def latest_report(asset_id: str, version_id: str | None = None) -> ValidationRep
     return reports[-1] if reports else None
 
 
+# ------------------------------------------------------------------ 语义校验（视觉 LLM）
+
+
+def save_semantic_check(check: SemanticCheck) -> SemanticCheck:
+    with _lock:
+        _write_json(reports_dir(check.asset_id) / f"{check.id}.json", _dump(check))
+    return check
+
+
+def list_semantic_checks(asset_id: str) -> list[SemanticCheck]:
+    root = reports_dir(asset_id)
+    if not root.exists():
+        return []
+    checks = [
+        SemanticCheck.model_validate(_read_json(p))
+        for p in root.glob("chk_*.json")
+    ]
+    return sorted(checks, key=lambda c: c.created_at)
+
+
+def latest_semantic_check(asset_id: str) -> SemanticCheck | None:
+    checks = list_semantic_checks(asset_id)
+    return checks[-1] if checks else None
+
+
 # ------------------------------------------------------------------ 导出记录
 
 
@@ -405,10 +431,12 @@ __all__ = [
     "get_version",
     "head_version",
     "latest_report",
+    "latest_semantic_check",
     "list_assets",
     "list_exports",
     "list_jobs",
     "list_reports",
+    "list_semantic_checks",
     "list_variants",
     "list_versions",
     "make_artifact_path",
@@ -418,6 +446,7 @@ __all__ = [
     "save_asset",
     "save_job",
     "save_report",
+    "save_semantic_check",
     "set_status",
     "source_dir",
     "unique_path",

@@ -21,6 +21,10 @@ export function Settings() {
   const [cost, setCost] = useState('');
   const [faceBudget, setFaceBudget] = useState('');
   const [blender, setBlender] = useState('');
+  const [llmBaseUrl, setLlmBaseUrl] = useState('');
+  const [llmModel, setLlmModel] = useState('');
+  const [llmKey, setLlmKey] = useState('');
+  const [llmTest, setLlmTest] = useState('');
 
   useEffect(() => {
     void (async () => {
@@ -42,6 +46,8 @@ export function Settings() {
     setCost(String(settings.cost_per_generation_cny));
     setFaceBudget(String(settings.default_face_budget));
     setBlender(settings.blender_bin);
+    setLlmBaseUrl(settings.llm.base_url);
+    setLlmModel(settings.llm.model);
   }, [settings]);
 
   const providers = (settings?.providers ?? []).filter((p) => p.name !== 'local_trellis');
@@ -284,6 +290,68 @@ export function Settings() {
             {settings.usage.this_month.cost.toFixed(2)}（上限 ¥{settings.monthly_budget_cny.toFixed(2)}）
             · 累计 {settings.usage.all_time.generations} 次
           </p>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>AI 助手</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          用于「AI 优化描述」与「AI 视觉校验」。任何 OpenAI 兼容服务均可：智谱 GLM（默认）、
+          DeepSeek、通义 DashScope 兼容模式、Moonshot、OpenAI 官方等，改 base_url 与模型名即可。
+          Key 只存本机，永不上传。
+        </p>
+        <div className="row wrap" style={{ alignItems: 'flex-end' }}>
+          <label style={{ flex: '1 1 280px' }}>
+            <div className="muted">API 地址（base_url）</div>
+            <input
+              value={llmBaseUrl}
+              onChange={(e) => setLlmBaseUrl(e.target.value)}
+              placeholder="https://open.bigmodel.cn/api/paas/v4"
+            />
+          </label>
+          <label style={{ flex: '1 1 160px' }}>
+            <div className="muted">模型名</div>
+            <input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder="glm-4-flash" />
+          </label>
+          <label style={{ flex: '1 1 200px' }}>
+            <div className="muted">
+              API Key {settings?.llm.configured && <span className="badge pass">已配置 · {settings.llm.key_masked}</span>}
+            </div>
+            <input
+              type="password"
+              value={llmKey}
+              onChange={(e) => setLlmKey(e.target.value)}
+              placeholder={settings?.llm.configured ? '输入新 Key 可覆盖（留空则不变）' : '粘贴 API Key'}
+            />
+          </label>
+          <button
+            className="primary"
+            onClick={async () => {
+              await handle(async () => {
+                await api.setLlmConfig({
+                  base_url: llmBaseUrl.trim() || undefined,
+                  model: llmModel.trim() || undefined,
+                  key: llmKey.trim() || undefined,
+                });
+                await refreshSettings();
+                setLlmKey('');
+                return true;
+              });
+            }}
+          >
+            保存
+          </button>
+          <button
+            onClick={async () => {
+              const result = await handle(() => api.testLlm());
+              setLlmTest(result ? `${result.ok ? '✅' : '❌'} ${result.message}` : '❌ 测试请求失败');
+            }}
+          >
+            测试连接
+          </button>
+        </div>
+        {llmTest && (
+          <p className="muted" style={{ marginBottom: 0 }}>{llmTest}</p>
         )}
       </div>
 

@@ -116,6 +116,8 @@ class Asset(BaseModel):
     picked_variant_id: str | None = None
     head_version_id: str | None = None
     prompt: str = ""
+    # AI 助手按知识库优化过的描述（generate 时优先级低于用户手输的 prompt）
+    enhanced_prompt: str = ""
     notes: str = ""
     tags: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=now)
@@ -199,6 +201,25 @@ class ValidationReport(BaseModel):
     def recompute(self) -> ValidationReport:
         self.passed = not self.failures
         return self
+
+
+class SemanticIssue(BaseModel):
+    severity: Literal["high", "medium", "low"] = "medium"
+    message: str
+
+
+class SemanticCheck(BaseModel):
+    """视觉 LLM 的语义校验结论：生成结果 vs 概念图/描述。"""
+
+    id: str = Field(default_factory=lambda: new_id("chk"))
+    asset_id: str
+    version_id: str | None = None
+    passed: bool = False
+    score: int = 0  # 0-100：与描述/概念图的整体吻合度
+    summary: str = ""
+    issues: list[SemanticIssue] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=now)
 
 
 class ExportRecord(BaseModel):
