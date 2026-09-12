@@ -11,6 +11,33 @@
 
 ---
 
+## 2026-09-12 第二十八轮：视口渲染发黑 + 顶点裂纹 —— 排查记（mushroom 视口复查）
+
+用户反馈：形状已正立但视口仍大片黑、部分顶点对不上。三个叠加根因 + 一个**流程坑**：
+
+1. **材质占位图**：`TextureVisuals(uv=uv)` 构造时 material 自动填 `Material()`
+   基类实例（**不是 None**），导出时 trimesh 对这种"无图基类材质"生成 2×2 灰
+   占位图 × 0.4 底色 → 近黑。sanitize 判定改为"无真 PBR 贴图材质就兜底"。
+2. **法线朝向**：fix_normals 对非水密小组件判定不可靠（73% 朝内）→
+   `_orient_components_outward` 按组件校正（99.7% 朝外）。**坑**：trimesh 的
+   `update_faces` 是"删除掩码"语义，传 (F,3) 数组被当 fancy index 产出
+   (F,3,3) 坐标数组污染 faces —— 必须用 faces setter 整体赋值。
+3. **顶点裂纹**：UV 缝复制顶点减面时各自塌缩 → decimate 前焊接；并绕开
+   trimesh 封装直接调 fast_simplification（其 `faces.view(np.ndarray)` 在
+   打包环境特定内存布局下抛 "triangles must be 2D"，是减面静默失败的源头）。
+
+**流程坑（排查耗时的主因）**：修完只重打 sidecar 而没重跑 electron-builder，
+win-unpacked/resources/sidecar-dist 一直是旧 exe——两轮"修复无效"假象。
+以后 sidecar 改动必须 sidecar-dist 重打 **+ electron-builder 重打包** 才算完。
+（另：PyInstaller 的 hidden-import 补齐了 app.ai/knowledge/ai_assist/telemetry/
+gltf_load，并加 --paths 指源码目录，避免 editable 安装的解析怪癖。）
+
+验证：两资产重跑校验全过（面数 5000 内）、GLB 材质 0.62 灰 doubleSided
+无占位图、重合顶点 0、组件朝向 99.7% 朝外、真机视口截图正常。95 passed。
+`f7151b2`
+
+---
+
 ## 2026-09-12 第二十四~二十七轮：GLB 导入三连修 + AI 助手（提示词优化 / 视觉校验）
 
 ### 第二十四轮：GLB 导入渲染碎片 —— 三个叠加根因（用户报 mushroom_house.glb）
