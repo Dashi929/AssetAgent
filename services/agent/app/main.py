@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import __version__
+from . import __version__, store
 from .config import get_settings
 from .jobs import runner
 from .providers import ProviderError, registry
@@ -43,6 +43,10 @@ async def lifespan(app: FastAPI):
     logger.info("生成路由：%s", settings.effective("route_mode", "byok"))
     configured = registry.configured_names()
     logger.info("已配置 Key 的 Provider：%s", "、".join(configured) or "无（将使用离线占位模式）")
+    # 上次进程退出时还在跑的任务已成孤儿（比如强杀/崩溃），标记失败，前端才不会永远转圈
+    reaped = store.reap_orphan_jobs()
+    for job in reaped:
+        logger.warning("孤儿任务已清理：job=%s step=%s asset=%s", job.id, job.step.value, job.asset_id)
     yield
     await runner.shutdown()
     logger.info("sidecar 已停止")

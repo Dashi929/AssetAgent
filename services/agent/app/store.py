@@ -22,6 +22,7 @@ from .models import (
     AssetStatus,
     ExportRecord,
     Job,
+    JobStatus,
     SpecPreset,
     ValidationReport,
     Variant,
@@ -340,6 +341,25 @@ def list_jobs(asset_id: str) -> list[Job]:
         return []
     jobs = [Job.model_validate(_read_json(p)) for p in root.glob("*.json")]
     return sorted(jobs, key=lambda j: j.created_at)
+
+
+def reap_orphan_jobs() -> list[Job]:
+    """应用重启后，落盘仍是 RUNNING 的任务已成孤儿（执行它们的进程没了）。
+
+    不清理的话前端会永远显示"进行中"。全部标记为失败，交由用户重试；
+    返回被清理的任务，供启动日志记录。
+    """
+    reaped: list[Job] = []
+    for asset in list_assets(include_archived=True):
+        for job in list_jobs(asset.id):
+            if job.status is not JobStatus.RUNNING:
+                continue
+            job.status = JobStatus.FAILED
+            job.error = "应用重启导致任务中断。任务本身没有问题，重新执行即可。"
+            job.finished_at = now()
+            save_job(job)
+            reaped.append(job)
+    return reaped
 
 
 def find_job(job_id: str) -> Job | None:

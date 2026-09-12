@@ -93,3 +93,27 @@ def test_list_assets_skips_corrupted_entries(tmp_path):
 
     assets = store.list_assets()
     assert [a.id for a in assets] == [good.id]
+
+
+def test_reap_orphan_jobs_marks_running_as_failed():
+    """应用重启后，落盘 RUNNING 的孤儿任务要被标记失败，前端才不会永远转圈。"""
+    from app import store
+    from app.models import Job, JobStatus, JobStep
+
+    asset = store.create_asset(name="SM_Reap_Prop")
+    running = store.save_job(Job(asset_id=asset.id, step=JobStep.PIPELINE))
+    running.status = JobStatus.RUNNING
+    running.progress = 0.6
+    store.save_job(running)
+    done = store.save_job(Job(asset_id=asset.id, step=JobStep.GENERATE))
+    done.status = JobStatus.SUCCEEDED
+    store.save_job(done)
+
+    reaped = store.reap_orphan_jobs()
+
+    assert [j.id for j in reaped] == [running.id]
+    after = {j.id: j for j in store.list_jobs(asset.id)}
+    assert after[running.id].status is JobStatus.FAILED
+    assert "重启" in after[running.id].error
+    assert after[running.id].finished_at is not None
+    assert after[done.id].status is JobStatus.SUCCEEDED  # 已结束的不动
