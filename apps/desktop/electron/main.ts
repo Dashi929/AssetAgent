@@ -8,10 +8,14 @@
  * GPU 等子进程崩溃 / 渲染进程 console / 无响应），见 electron/logging.ts。
  */
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 import { log, logsDir } from './logging';
 import { SidecarManager, type SidecarStatus } from './sidecar';
+
+// Chromium 内部 UI（页面右键菜单、输入框菜单等）固定为中文 ——
+// Electron 自带的英文菜单/右键项跟系统语言走，但应用菜单栏必须自建才有中文
+app.commandLine.appendSwitch('lang', 'zh-CN');
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 const repoRoot = isDev ? path.resolve(__dirname, '..', '..', '..') : process.resourcesPath;
@@ -125,7 +129,52 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
+// 中文应用菜单：Electron 默认菜单永远是英文，role 只管快捷键/行为，label 全部自己写
+function buildApplicationMenu(): void {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: '文件',
+      submenu: [{ role: 'quit', label: '退出 AssetAgent' }],
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'selectAll', label: '全选' },
+      ],
+    },
+    {
+      label: '视图',
+      submenu: [
+        { role: 'reload', label: '重新加载' },
+        { role: 'forceReload', label: '强制重新加载' },
+        { role: 'toggleDevTools', label: '开发者工具' },
+        { type: 'separator' },
+        { role: 'resetZoom', label: '实际大小' },
+        { role: 'zoomIn', label: '放大' },
+        { role: 'zoomOut', label: '缩小' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: '全屏' },
+      ],
+    },
+    {
+      label: '窗口',
+      submenu: [
+        { role: 'minimize', label: '最小化' },
+        { role: 'close', label: '关闭窗口' },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 async function bootstrap(): Promise<void> {
+  buildApplicationMenu();
   mainWindow = createWindow();
 
   // 状态变化的广播由 onStatusChange 统一发；这里只负责拉起
