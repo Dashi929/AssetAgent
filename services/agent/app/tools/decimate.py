@@ -67,7 +67,17 @@ def decimate_mesh(
             # 走 trimesh 的封装而不是直接调 fast_simplification.simplify：
             # trimesh 会顺带把 UV / 顶点法线 / 材质映射一起迁移到新拓扑上，
             # 直接调底层库会把这些属性丢掉。
-            simplified = mesh.simplify_quadric_decimation(face_count=target_faces)
+            #
+            # fast-simplification 是近似收敛：一次调用可能停在预算之上
+            # （实测 160k→5000 目标落在 6219）。闭环收紧：按实际比例修正
+            # 目标再来一轮，最多三轮，把"面数预算"这条硬承诺兑现。
+            simplified = mesh
+            adjusted = target_faces
+            for _ in range(3):
+                simplified = simplified.simplify_quadric_decimation(face_count=adjusted)
+                if len(simplified.faces) <= target_faces or len(simplified.faces) >= len(mesh.faces):
+                    break
+                adjusted = max(4, round(adjusted * target_faces / max(1, len(simplified.faces))))
             if _components_exploded(mesh, simplified):
                 # 多组件网格（扫描件/带大量装饰小件）整体减面会把小组件炸成
                 # 碎片（mushroom_house 实测 26 组件 → 3496 组件）。
