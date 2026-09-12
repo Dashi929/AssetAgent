@@ -11,6 +11,49 @@
 
 ---
 
+## 2026-09-12 第二十四~二十七轮：GLB 导入三连修 + AI 助手（提示词优化 / 视觉校验）
+
+### 第二十四轮：GLB 导入渲染碎片 —— 三个叠加根因（用户报 mushroom_house.glb）
+
+逐帧渲染管线各步产物定位（缩略图对照），三个独立问题叠加：
+
+1. **repair 剔除游离组件在万组件网格上静默失败**：`mesh.split()` 构建子网格内存爆炸，
+   异常被吞，碎片原样流进 fast-simplification 被炸成 3496 个组件 —— 改为
+   face 邻接连通分量 + 面掩码（不建子网格），失败原因带出 report。
+2. **管线内部轴约定是 Z-up**（repair 归一化底面/校验 pivot/软渲染相机），GLB 是
+   Y-up；mock 测试数据恰好 Z-up 从未暴露 → 统一 Y-up，软渲染不再侧躺。
+3. **decimate 无护栏** → 组件数暴涨检测 + 逐组件减面回退；另加闭环收紧
+   （fast-simplification 近似收敛，单次 5000 目标落在 6219，按比例修正最多
+   三轮，真实文件 134k→4019 达标）。
+
+附带：自有 GLB 加载器 `app/tools/gltf_load.py`（规范子集 + 人话报错，接管
+.glb/.gltf；7 个单测）+ 管线专用线程池（隔离默认池偶发挂起）+
+`uv_island_margin_px` 加 15s 时间预算（xatlas 布局不带种子，O(岛对²) 距离
+计算偶发分钟级，曾把管线卡死在 validate——faulthandler 线程栈抓到的）。
+
+真实 mushroom_house.glb 端到端：剔 3458 游离组件 → 4019 面（预算内），
+正立、无碎片，与 Blender 参考一致；打包版重新导入+回滚重跑全过，校验零 FAIL。
+**89→95 passed**。`a764cee` `ca1ab52`
+
+### 第二十五~二十七轮：AI 助手（新功能，用户需求）
+
+链路：**描述/图片 → LLM 按知识库优化提示词 → 生成 → 视觉 LLM 校验结果**。
+
+| 组件 | 内容 |
+|---|---|
+| `app/ai/llm.py` | OpenAI 兼容适配器（chat/vision/JSON 模式）；默认智谱 GLM，base_url/model 可换（DeepSeek/通义/Moonshot/OpenAI）；Key 复用 BYOK |
+| `recipes/knowledge/prompt_optimization.md` | 提示词知识库（TA 可编辑，即时生效）：单主体/完整可见/风格词/比例锚点/本项目校验口径/类目词汇表 |
+| `app/knowledge.py` | 知识库加载（recipes_dir 三级回落，mtime 缓存） |
+| 端点 | `POST /{id}/enhance-prompt`（落库 enhanced_prompt）、`POST /api/assets/enhance-prompt-preview`（工作台预览不落库）、`POST /{id}/visual-check`（概念图+转台帧 → SemanticCheck 落盘） |
+| generate | 提示词优先级：用户手输 > AI 优化词 > 原始描述 |
+| 前端 | 设置页「AI 助手」卡片；工作台「AI 优化描述」按钮（结果填回可编辑）；详情页「AI 视觉校验」卡片（评分/问题/建议） |
+| 埋点 | llm_enhance / llm_visual_check |
+
+**95 passed（含 6 个 AI 测试，LLM 调用全部 mock）**。真机验证：设置卡片/
+详情卡片截图确认；**真实调用待用户填 Key**（默认 GLM glm-4-flash）。`f5d3adb`
+
+---
+
 ## 2026-09-12 第二十二轮：G4 压测 + 真机走查 + CSP blob 修复（打包版全链路绿）
 
 ### 改动摘要
