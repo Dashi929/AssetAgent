@@ -110,9 +110,11 @@ def create_asset(
     source: str = "image",
     prompt: str = "",
     tags: list[str] | None = None,
+    kind: str = "model",
 ) -> Asset:
     asset = Asset(
         name=name,
+        kind=kind,  # type: ignore[arg-type]
         spec=spec or SpecPreset(),
         source=source,  # type: ignore[arg-type]
         prompt=prompt,

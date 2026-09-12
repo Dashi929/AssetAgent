@@ -53,6 +53,8 @@ export interface SpecPreset {
 export interface Asset {
   id: string;
   name: string;
+  /** 素材类型：model = 3D 网格；image = 2D 图片（详情页走图片预览 + AI 编辑） */
+  kind: 'model' | 'image';
   style_id: string | null;
   source: AssetSource;
   status: AssetStatus;

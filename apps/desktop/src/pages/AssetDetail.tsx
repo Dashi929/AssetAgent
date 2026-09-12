@@ -27,6 +27,9 @@ export function AssetDetail() {
   const [allowFailedExport, setAllowFailedExport] = useState(false);
   const [exportResult, setExportResult] = useState<{ warnings: string[]; files: string[] } | null>(null);
   const [checking, setChecking] = useState(false);
+  const [aiInstruction, setAiInstruction] = useState('');
+  const [aiEditing, setAiEditing] = useState(false);
+  const [aiEditResult, setAiEditResult] = useState<{ summary: string; applied: Record<string, unknown> } | null>(null);
 
   useEffect(() => {
     void openAsset(assetId);
@@ -98,6 +101,19 @@ export function AssetDetail() {
     });
   };
 
+  const runAiEdit = async () => {
+    if (!aiInstruction.trim()) return;
+    setAiEditing(true);
+    try {
+      const result = await api.aiEdit(asset.id, aiInstruction.trim());
+      setAiEditResult({ summary: result.summary, applied: result.applied });
+      setAiInstruction('');
+      await openAsset(asset.id);
+    } finally {
+      setAiEditing(false);
+    }
+  };
+
   const runVisualCheck = async () => {
     setChecking(true);
     try {
@@ -141,19 +157,35 @@ export function AssetDetail() {
           </div>
         </div>
         <div className="row">
-          {asset.source === 'image' && (
-            <button onClick={regenerate} disabled={!!job && job.status === 'running'}>
-              重新生成
+          {asset.kind === 'image' ? (
+            <button
+              className="primary"
+              onClick={async () => {
+                const started = await handle(() => api.generateImage(asset.id, asset.enhanced_prompt || asset.prompt));
+                if (started) trackJob(started.job);
+              }}
+              disabled={!!job && job.status === 'running' || !asset.enhanced_prompt && !asset.prompt}
+              title={!asset.enhanced_prompt && !asset.prompt ? '先在 AI 属性编辑里填写生成描述' : undefined}
+            >
+              重新生成图片（后台）
             </button>
+          ) : (
+            <>
+              {asset.source === 'image' && (
+                <button onClick={regenerate} disabled={!!job && job.status === 'running'}>
+                  重新生成
+                </button>
+              )}
+              <button
+                className="primary"
+                onClick={runPipeline}
+                disabled={!!job && job.status === 'running' || (!pickedVariant && versions.length === 0)}
+                title={!pickedVariant && versions.length === 0 ? '先挑选一个变体或导入网格' : undefined}
+              >
+                跑后处理管线
+              </button>
+            </>
           )}
-          <button
-            className="primary"
-            onClick={runPipeline}
-            disabled={!!job && job.status === 'running' || (!pickedVariant && versions.length === 0)}
-            title={!pickedVariant && versions.length === 0 ? '先挑选一个变体或导入网格' : undefined}
-          >
-            跑后处理管线
-          </button>
           <button className="danger" onClick={archive}>
             归档
           </button>
@@ -171,6 +203,78 @@ export function AssetDetail() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 14 }}>
         <div>
+          <div className="card">
+            <div className="row" style={{ marginBottom: 10 }}>
+              <h2 style={{ margin: 0 }}>AI 属性编辑</h2>
+              <span className="spacer" />
+              {settings?.llm.configured ? null : (
+                <span className="muted">需要先在 设置 → AI 助手 配置 Key</span>
+              )}
+            </div>
+            <p className="muted" style={{ marginTop: 0 }}>
+              用一句话让 AI 修改资产属性：改名、标签、备注、生成描述、面数预算、期望尺寸、贴图分辨率。
+              改完立即生效（可在下方资产信息里核对）。
+            </p>
+            <div className="row" style={{ alignItems: 'flex-end' }}>
+              <label style={{ flex: '1 1 320px' }}>
+                <div className="muted">要改什么？</div>
+                <input
+                  value={aiInstruction}
+                  onChange={(e) => setAiInstruction(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !aiEditing) void runAiEdit();
+                  }}
+                  placeholder="例如：改名为 SM_Iron_Chest，标签加上 金属、宝箱，面数预算降到 2000"
+                />
+              </label>
+              <button
+                className="primary"
+                onClick={runAiEdit}
+                disabled={aiEditing || !aiInstruction.trim() || !settings?.llm.configured}
+              >
+                {aiEditing ? 'AI 编辑中…' : '应用 AI 修改'}
+              </button>
+            </div>
+            {aiEditResult && (
+              <div style={{ marginTop: 10 }}>
+                {aiEditResult.summary && <p style={{ margin: '4px 0' }}>{aiEditResult.summary}</p>}
+                <pre
+                  className="mono"
+                  style={{
+                    margin: 0,
+                    background: 'var(--bg-subtle)',
+                    padding: 10,
+                    borderRadius: 8,
+                    whiteSpace: 'pre-wrap',
+                    fontSize: 12,
+                  }}
+                >
+                  {JSON.stringify(aiEditResult.applied, null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+
+          {asset.kind === 'image' ? (
+            <div className="card">
+              <div className="row" style={{ marginBottom: 10 }}>
+                <h2 style={{ margin: 0 }}>2D 素材预览</h2>
+                <span className="spacer" />
+                <span className="muted">
+                  {detail?.thumbnail ? '最新生成图' : '还没有生成图'}
+                </span>
+              </div>
+              {detail?.thumbnail ? (
+                <img
+                  src={fileUrlSync(detail.thumbnail)}
+                  alt={asset.name}
+                  style={{ width: '100%', borderRadius: 8, border: '0.5px solid var(--border)' }}
+                />
+              ) : (
+                <div className="empty">还没有生成图片。点右上角「重新生成图片」或先填写描述。</div>
+              )}
+            </div>
+          ) : (
           <div className="card">
             <div className="row" style={{ marginBottom: 10 }}>
               <h2 style={{ margin: 0 }}>
@@ -194,6 +298,7 @@ export function AssetDetail() {
               emptyHint={asset.source === 'image' ? '先生成并挑选一个变体' : '导入网格后即可检查'}
             />
           </div>
+          )}
 
           {variants.length > 0 && (
             <div className="card">
@@ -231,8 +336,8 @@ export function AssetDetail() {
               <span className="spacer" />
               <button
                 onClick={runVisualCheck}
-                disabled={checking || !detail?.turntable?.length}
-                title={detail?.turntable?.length ? '视觉 LLM 用概念图 + 转台帧对照描述打分' : '先跑一次管线生成转台帧'}
+                disabled={checking || (asset.kind === 'model' && !detail?.turntable?.length)}
+                title={asset.kind === 'image' ? '视觉 LLM 对照资产描述检查图片' : '视觉 LLM 用概念图 + 转台帧对照描述打分'}
               >
                 {checking ? '校验中…' : '开始 AI 视觉校验'}
               </button>
@@ -298,6 +403,7 @@ export function AssetDetail() {
             </div>
           )}
 
+          {asset.kind === 'model' && (
           <div className="card">
             <div className="row" style={{ marginBottom: 10 }}>
               <h2 style={{ margin: 0 }}>
@@ -310,7 +416,9 @@ export function AssetDetail() {
             </div>
             <ValidationReport report={activeReport} onLocate={locate} />
           </div>
+          )}
 
+          {asset.kind === 'model' && (
           <div className="card">
             <h2>导出</h2>
             <div className="row wrap" style={{ alignItems: 'flex-end' }}>
@@ -379,6 +487,7 @@ export function AssetDetail() {
               </div>
             )}
           </div>
+          )}
         </div>
 
         <div>

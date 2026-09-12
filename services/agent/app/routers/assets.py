@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from .. import store, telemetry
+from ..ai import llm as llm_module
 from ..config import get_settings
 from ..jobs import runner
 from ..models import (
@@ -43,6 +44,7 @@ from ..tools import (
     render_thumbnail,
     run_pipeline,
 )
+from ..tools.pipeline import _run_off_loop
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
@@ -66,6 +68,14 @@ def _asset_summary(asset: Asset) -> dict[str, Any]:
         thumbnail = str(thumb_path)
     elif variants and variants[-1].thumbnail_path:
         thumbnail = variants[-1].thumbnail_path
+    elif asset.kind == "image":
+        # 2D 图片资产：缩略图 = 最新生成图，否则源图
+        renders = sorted((store.asset_dir(asset.id) / "renders").glob("*.png"))
+        if renders:
+            thumbnail = str(renders[-1])
+        elif asset.source_files:
+            source = Path(asset.source_files[-1])
+            thumbnail = str(source) if source.exists() else None
     turntable = sorted((store.asset_dir(asset.id) / "turntable").glob("turntable_*.png"))
 
     return {
@@ -127,6 +137,7 @@ async def get_asset(asset_id: str) -> dict[str, Any]:
 async def create_asset(body: CreateAssetBody) -> dict[str, Any]:
     asset = store.create_asset(
         name=body.name,
+        kind=body.kind,
         spec=body.spec,
         source=body.source.value,
         prompt=body.prompt,
@@ -175,7 +186,7 @@ async def create_asset_from_mesh(
     name: str = Form("未命名资产"),
     preset_key: str = Form(""),
 ) -> dict[str, Any]:
-    """工作流 C 的入口：拖入任意来源的粗糙网格，只跑后处理，零 API 成本、永久免费。"""
+    """工作流 C 的入口（同步版，兼容旧调用）：导入网格并返回，管线由前端另发任务。"""
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in MESH_SUFFIXES:
         raise HTTPException(
@@ -187,37 +198,137 @@ async def create_asset_from_mesh(
     asset = store.create_asset(name=name, spec=spec, source=AssetSource.MESH.value)
     target = store.write_source_bytes(asset.id, Path(file.filename or "input.glb").name, await file.read())
 
-    # 立刻建一个 import 版本节点，管线才能从它往后接
+    try:
+        node = _build_import_node(asset.id, target, suffix)
+    except MeshError as exc:
+        telemetry.record("import_mesh", asset_id=asset.id, suffix=suffix, ok=False)
+        store.archive_asset(asset.id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    store.add_version(node)
+    store.patch_asset(asset.id, status=AssetStatus.PROCESSING)
+    telemetry.record("create_asset", asset_id=asset.id, source=asset.source)
+    telemetry.record("import_mesh", asset_id=asset.id, suffix=suffix, ok=True)
+    return _asset_summary(store.get_asset(asset.id))
+
+
+def _build_import_node(asset_id: str, target: Path, suffix: str) -> VersionNode:
+    """为导入的网格建立 import 版本节点（FBX 就地转 GLB 工作副本）。同步，重。"""
     node = VersionNode(
-        asset_id=asset.id,
+        asset_id=asset_id,
         parent_id=None,
         op=VersionOp.IMPORT,
         label="导入原始网格",
         params={"source": str(target)},
         mesh_path=str(target),
     )
-
-    # FBX 没有纯 Python 的可靠读取方案，导入时经 Blender 转成 GLB 工作副本：
-    # 原始 FBX 留在 source/ 只读，管线与视口全程只见 GLB（见 tools/convert.py）
     mesh_path = target
     if suffix == ".fbx":
-        try:
-            mesh_path = convert_to_glb(target, store.version_dir(asset.id, node.id))
-        except MeshError as exc:
-            telemetry.record("import_mesh", asset_id=asset.id, suffix=suffix, ok=False)
-            store.archive_asset(asset.id)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # FBX 没有纯 Python 的可靠读取方案，导入时经 ufbx2obj/Blender 转成 GLB：
+        # 原始 FBX 留在 source/ 只读，管线与视口全程只见 GLB（见 tools/convert.py）
+        mesh_path = convert_to_glb(target, store.version_dir(asset_id, node.id))
         node.params["converted_from"] = str(target)
         node.label = "导入 FBX（已转 GLB 工作副本）"
-
     node.mesh_path = str(mesh_path)
-    store.add_version(node)
-    store.patch_asset(asset.id, status=AssetStatus.PROCESSING)
-    telemetry.record(
-        "create_asset", asset_id=asset.id, source=asset.source
-    )
-    telemetry.record("import_mesh", asset_id=asset.id, suffix=suffix, ok=True)
-    return _asset_summary(store.get_asset(asset.id))
+    return node
+
+
+@router.post("/import", status_code=202)
+async def import_assets(
+    files: list[UploadFile] = File(...),
+    name: str = Form(""),
+    preset_key: str = Form(""),
+) -> dict[str, Any]:
+    """工作台「导入」入口：2D/3D 素材批量导入，**后台队列**自动处理。
+
+    - 3D 网格（glb/gltf/obj/fbx/ply/stl）：建资产 → 后台任务完成 FBX 转换与
+      整条后处理管线，完成后状态推到 已校验/待校验；
+    - 2D 图片（png/jpg/webp/bmp）：建 2D 资产（kind=image），后台校验后即可用。
+
+    返回每个文件的资产与任务 id —— 前端轮询任务，完成后通知并引导跳转预览/编辑。
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="没有收到任何文件。")
+    presets = load_spec_presets()
+    spec = presets.get(preset_key) if preset_key else None
+    imports: list[dict[str, Any]] = []
+
+    for file in files:
+        filename = Path(file.filename or "未命名.asset").name
+        suffix = Path(filename).suffix.lower()
+        single_name = name.strip() if len(files) == 1 and name.strip() else filename.rsplit(".", 1)[0]
+
+        if suffix in MESH_SUFFIXES:
+            spec_model = spec or _resolve_preset(preset_key)
+            asset = store.create_asset(
+                name=single_name, spec=spec_model, source=AssetSource.MESH.value, kind="model"
+            )
+            target = store.write_source_bytes(asset.id, filename, await file.read())
+            store.patch_asset(asset.id, status=AssetStatus.PROCESSING)
+
+            async def work(progress, *, asset_id=asset.id, path=target, suffix=suffix) -> None:
+                try:
+                    progress(0.05, "解析源文件…")
+                    node = await _run_off_loop(_build_import_node, asset_id, path, suffix)
+                    store.add_version(node)
+                    progress(0.25, "后处理管线…")
+                    await run_pipeline(asset_id, progress)
+                except Exception:
+                    store.patch_asset(asset_id, status=AssetStatus.FAILED)
+                    raise
+
+            job = await runner.submit(asset.id, JobStep.PIPELINE, work)
+            imports.append(
+                {"kind": "model", "asset": _asset_summary(store.get_asset(asset.id)), "job": job.model_dump(mode="json")}
+            )
+            telemetry.record("create_asset", asset_id=asset.id, source=asset.source)
+            telemetry.record("import_queue", asset_id=asset.id, suffix=suffix, ok=True)
+
+        elif suffix in IMAGE_SUFFIXES:
+            asset = store.create_asset(
+                name=single_name, source=AssetSource.IMAGE.value, kind="image"
+            )
+            store.write_source_bytes(asset.id, filename, await file.read())
+            store.patch_asset(asset.id, status=AssetStatus.PROCESSING)
+
+            async def work(progress, *, asset_id=asset.id, path=None, filename=filename) -> None:
+                progress(0.5, "校验图片…")
+                source = store.source_dir(asset_id) / filename
+                await _run_off_loop(_validate_image, source)
+                store.patch_asset(asset_id, status=AssetStatus.VALIDATED)
+
+            job = await runner.submit(asset.id, JobStep.PIPELINE, work)
+            imports.append(
+                {"kind": "image", "asset": _asset_summary(store.get_asset(asset.id)), "job": job.model_dump(mode="json")}
+            )
+            telemetry.record("create_asset", asset_id=asset.id, source=asset.source)
+            telemetry.record("import_queue", asset_id=asset.id, suffix=suffix, ok=True)
+
+        else:
+            imports.append(
+                {"kind": "unsupported", "filename": filename, "error": f"不支持的格式 {suffix}"}
+            )
+
+    return {"imports": imports}
+
+
+def _validate_image(path: Path) -> None:
+    """图片导入校验：能打开且尺寸合理。"""
+    from PIL import Image
+
+    if not path.exists():
+        raise ValueError(f"图片文件丢失：{path.name}")
+    try:
+        with Image.open(path) as im:
+            im.verify()
+        with Image.open(path) as im:
+            w, h = im.size
+        if w < 8 or h < 8:
+            raise ValueError(f"图片尺寸过小（{w}×{h}）")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"图片无法读取（{type(exc).__name__}），文件可能已损坏。") from exc
 
 
 def _resolve_preset(preset_key: str) -> SpecPreset:
@@ -238,6 +349,11 @@ def _resolve_preset(preset_key: str) -> SpecPreset:
 @router.post("/{asset_id}/generate", status_code=202)
 async def generate_variants(asset_id: str, body: GenerateBody) -> dict[str, Any]:
     asset = _require_asset(asset_id)
+    if asset.kind == "image":
+        raise HTTPException(
+            status_code=400,
+            detail="这是 2D 图片素材：请使用「生成图片」（generate-image）而不是 3D 模型生成。",
+        )
     settings = get_settings()
 
     try:
@@ -540,6 +656,64 @@ async def retry(asset_id: str) -> dict[str, Any]:
     _require_asset(asset_id)
     target = AssetStatus.AWAITING_PICK if store.list_variants(asset_id) else AssetStatus.DRAFT
     return _asset_summary(store.patch_asset(asset_id, status=target))
+
+
+# ------------------------------------------------------------------ 2D 图片素材
+
+
+@router.post("/{asset_id}/generate-image", status_code=202)
+async def generate_image(asset_id: str, body: GenerateBody) -> dict[str, Any]:
+    """2D 图片素材生成：LLM 优化提示词 → CogView 出图 → 落为版本节点（后台任务）。"""
+    asset = _require_asset(asset_id)
+    if asset.kind != "image":
+        raise HTTPException(status_code=400, detail="只有 2D 图片素材才能生成图片，3D 资产请使用模型生成。")
+    if not (body.prompt or asset.enhanced_prompt or asset.prompt).strip():
+        raise HTTPException(status_code=400, detail="没有生成依据：请先输入描述，或先使用 AI 优化描述。")
+
+    store.patch_asset(asset_id, status=AssetStatus.GENERATING)
+    from ..ai import imagegen as imagegen_module
+    from ..ai.llm import LLMError
+
+    async def work(progress) -> None:
+        progress(0.05, "AI 优化提示词…")
+        raw_prompt = (body.prompt or asset.enhanced_prompt or asset.prompt).strip()
+        try:
+            optimized = await llm_module.chat_json(
+                "你是 2D 游戏素材的提示词优化助手。知识库要点：单一主体、完整可见、"
+                "纯色背景、无文字水印、风格词具体（stylized/hand-painted/pixel art 等）。"
+                "把用户的描述优化成一段图像生成提示词（中文），只输出 JSON："
+                '{"prompt": "优化后的完整描述"}',
+                f"用户描述：{raw_prompt}",
+            )
+            prompt = str(optimized.get("prompt") or "").strip() or raw_prompt
+        except LLMError:
+            prompt = raw_prompt  # 优化失败不阻塞生成，直接用原描述
+
+        renders = store.asset_dir(asset_id) / "renders"
+        renders.mkdir(parents=True, exist_ok=True)
+        index = len(list(renders.glob("img_*.png"))) + 1
+        progress(0.2, "生成图片…")
+        image_path = await imagegen_module.generate_image(
+            prompt, renders / f"img_{index:03d}.png", size="1024x1024"
+        )
+
+        node = VersionNode(
+            asset_id=asset_id,
+            parent_id=None,
+            op=VersionOp.GENERATE,
+            label=f"2D 生成 · {imagegen_module.imagegen_model()}",
+            params={"prompt": prompt, "image": str(image_path), "source_prompt": raw_prompt},
+            mesh_path="",
+        )
+        store.add_version(node)
+        store.patch_asset(asset_id, status=AssetStatus.VALIDATED)
+        telemetry.record(
+            "generate_image", asset_id=asset_id, version_id=node.id, prompt_chars=len(prompt), ok=True
+        )
+        progress(1.0, "图片生成完成")
+
+    job = await runner.submit(asset_id, JobStep.GENERATE, work)
+    return {"job": job.model_dump(mode="json")}
 
 
 def _timestamp() -> str:

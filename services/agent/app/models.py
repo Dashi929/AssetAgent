@@ -108,6 +108,8 @@ class SpecPreset(BaseModel):
 class Asset(BaseModel):
     id: str = Field(default_factory=lambda: new_id("asset"))
     name: str = "未命名资产"
+    # 素材类型：model = 3D 网格（走管线/视口/导出）；image = 2D 图片（图片预览 + AI 编辑）
+    kind: Literal["model", "image"] = "model"
     style_id: str | None = None
     source: AssetSource = AssetSource.IMAGE
     status: AssetStatus = AssetStatus.DRAFT
@@ -248,6 +250,7 @@ class ProviderInfo(BaseModel):
 
 class CreateAssetBody(BaseModel):
     name: str = "未命名资产"
+    kind: Literal["model", "image"] = "model"
     source: AssetSource = AssetSource.IMAGE
     spec: SpecPreset = Field(default_factory=SpecPreset)
     prompt: str = ""

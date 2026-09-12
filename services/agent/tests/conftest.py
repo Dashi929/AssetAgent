@@ -77,3 +77,14 @@ def dirty_glb(tmp_path):
     path = tmp_path / "dirty.glb"
     path.write_bytes(mesh.export(file_type="glb"))
     return path
+
+
+@pytest.fixture
+def with_llm_key():
+    """给测试进程塞一个 LLM Key（真实 settings 机制），结束清除。"""
+    from app.config import get_settings
+
+    settings = get_settings()
+    settings.set_provider_key("llm", "test-key-12345")
+    yield
+    settings.set_provider_key("llm", "")

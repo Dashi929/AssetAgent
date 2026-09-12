@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"  # 智谱开放平台，可换任何兼容服务
     llm_model: str = "glm-4-flash"
     llm_api_key: str = ""
+    # 2D 图片生成模型（与 LLM 同平台同 Key；CogView 为智谱的图像生成模型）
+    imagegen_model: str = "cogview-3-flash"
 
     # ---- 成本 ----
     assetagent_cost_per_generation_cny: float = 2.5

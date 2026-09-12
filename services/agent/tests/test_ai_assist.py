@@ -14,15 +14,6 @@ from app import telemetry
 from app.config import get_settings
 
 
-@pytest.fixture
-def with_llm_key(monkeypatch):
-    """给测试进程塞一个 LLM Key（走真实 settings 机制）。"""
-    settings = get_settings()
-    settings.set_provider_key("llm", "test-key-12345")
-    yield
-    settings.set_provider_key("llm", "")
-
-
 def test_enhance_requires_key(client, monkeypatch):
     uploaded = client.post(
         "/api/assets/upload",

@@ -9,6 +9,7 @@
   "生成结果 vs 概念图"的语义校验。
 """
 
+from .imagegen import ImageGenError, generate_image
 from .llm import (
     LLMError,
     chat,
@@ -18,4 +19,13 @@ from .llm import (
     vision_chat_json,
 )
 
-__all__ = ["LLMError", "chat", "chat_json", "image_content", "llm_configured", "vision_chat_json"]
+__all__ = [
+    "ImageGenError",
+    "LLMError",
+    "chat",
+    "chat_json",
+    "generate_image",
+    "image_content",
+    "llm_configured",
+    "vision_chat_json",
+]

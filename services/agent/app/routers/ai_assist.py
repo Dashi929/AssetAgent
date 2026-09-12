@@ -10,6 +10,9 @@
 
 from __future__ import annotations
 
+import re
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -209,6 +212,115 @@ async def visual_check(asset_id: str) -> dict:
         ok=True,
     )
     return {"check": check.model_dump(mode="json")}
+
+
+class AiEditBody(BaseModel):
+    instruction: str
+
+
+# LLM 允许修改的资产属性白名单（之外的指令一律拒绝，防止越权改内部字段）
+EDITABLE_SPEC = {"face_budget", "expected_size_m", "texture_resolution"}
+
+
+@router.post("/{asset_id}/ai-edit")
+async def ai_edit(asset_id: str, body: AiEditBody) -> dict:
+    """预览/编辑模式里的 AI 属性编辑：自然语言指令 → 结构化属性变更 → 应用。
+
+    LLM 只能在白名单内产变更（名称/备注/描述/提示词 + 规格三项），
+    应用前后对比返回给前端展示；产出空变更时如实说明而不再猜。
+    """
+    asset = _require_asset(asset_id)
+    _require_llm()
+    instruction = body.instruction.strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="请先输入要修改的内容。")
+
+    spec = asset.spec
+    context = "\n".join(
+        [
+            f"资产名：{asset.name}",
+            f"素材类型：{asset.kind}",
+            f"备注：{asset.notes or '（无）'}",
+            f"生成描述：{asset.prompt or asset.enhanced_prompt or '（无）'}",
+            f"标签：{'、'.join(asset.tags) or '（无）'}",
+            f"规格：面数预算 {spec.face_budget}，期望尺寸 {spec.expected_size_m or '未指定'}m，"
+            f"贴图分辨率 {spec.texture_resolution}",
+        ]
+    )
+    system = (
+        "你是游戏资产管理器的属性编辑助手。根据用户指令，把要修改的属性以 JSON 变更集返回。\n"
+        "只允许修改这些字段：name（资产名，需符合 ^SM_[A-Za-z0-9_]+$）、notes（备注）、"
+        "enhanced_prompt（生成描述）、prompt（原始描述）、tags（字符串数组）、"
+        "face_budget / expected_size_m / texture_resolution（放在 spec 对象里）。\n"
+        "用户没让改的字段**不要出现在变更里**。资产名如果被改，必须符合命名正则。\n"
+        '严格输出 JSON：{"changes": {"name": "...", "tags": [...], "spec": {"face_budget": 2000}}, '
+        '"summary": "一句话说明改了什么"}'
+    )
+    try:
+        result = await llm_module.chat_json(system, f"当前资产：\n{context}\n\n用户指令：{instruction}")
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    changes = result.get("changes") or {}
+    if not isinstance(changes, dict) or not changes:
+        raise HTTPException(
+            status_code=400,
+            detail="AI 没有从指令里解析出可修改的属性。请换一种说法，"
+            "例如「把名字改成 SM_Sword_01」「面数预算降到 2000」「标签加上 金属、武器」。",
+        )
+
+    before = {
+        "name": asset.name,
+        "notes": asset.notes,
+        "enhanced_prompt": asset.enhanced_prompt,
+        "prompt": asset.prompt,
+        "tags": list(asset.tags),
+        "spec": {
+            "face_budget": spec.face_budget,
+            "expected_size_m": spec.expected_size_m,
+            "texture_resolution": spec.texture_resolution,
+        },
+    }
+    applied: dict[str, Any] = {}
+    patch: dict[str, Any] = {}
+
+    if "name" in changes:
+        new_name = str(changes["name"]).strip()
+        if not re.match(r"^SM_[A-Za-z0-9_]+$", new_name):
+            raise HTTPException(status_code=400, detail=f"AI 给出的资产名「{new_name}」不符合命名规范。")
+        patch["name"] = new_name
+        applied["name"] = new_name
+    if "notes" in changes:
+        patch["notes"] = str(changes["notes"])
+        applied["notes"] = str(changes["notes"])
+    if "enhanced_prompt" in changes:
+        patch["enhanced_prompt"] = str(changes["enhanced_prompt"])
+        applied["enhanced_prompt"] = str(changes["enhanced_prompt"])
+    if "prompt" in changes:
+        patch["prompt"] = str(changes["prompt"])
+        applied["prompt"] = str(changes["prompt"])
+    if "tags" in changes and isinstance(changes["tags"], list):
+        tags = [str(t).strip() for t in changes["tags"] if str(t).strip()]
+        patch["tags"] = tags
+        applied["tags"] = tags
+    spec_changes = changes.get("spec") or {}
+    if isinstance(spec_changes, dict) and spec_changes:
+        new_spec = spec.model_copy(update={k: spec_changes[k] for k in EDITABLE_SPEC if k in spec_changes})
+        patch["spec"] = new_spec
+        applied["spec"] = {k: getattr(new_spec, k) for k in new_spec.model_dump() if k in spec_changes}
+
+    if not applied:
+        raise HTTPException(status_code=400, detail="AI 的回复里没有落在白名单内的属性变更。")
+
+    store.patch_asset(asset_id, **patch)
+    telemetry.record(
+        "llm_edit",
+        asset_id=asset_id,
+        fields=sorted(applied.keys()),
+        instruction_chars=len(instruction),
+        ok=True,
+    )
+    return {"summary": str(result.get("summary") or ""), "applied": applied, "before": before}
 
 
 def _collect_check_images(asset_id: str) -> list[str]:

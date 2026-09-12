@@ -220,6 +220,43 @@ export const api = {
 
   testLlm: () => request<{ ok: boolean; message: string }>('/api/settings/llm/test', { method: 'POST' }),
 
+  /** 新建资产（2D 图片素材走 kind: 'image'，再配 generateImage 后台生成）。 */
+  createAsset: (body: {
+    name: string;
+    kind?: 'model' | 'image';
+    source?: 'image' | 'text' | 'mesh';
+    prompt?: string;
+  }) => request<AssetSummary>('/api/assets', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** 工作台「导入」：2D/3D 混合批量，后台队列自动处理（模型自动跑管线）。 */
+  importAssets: (files: File[], name = '', presetKey = '') => {
+    const form = new FormData();
+    files.forEach((file) => form.append('files', file));
+    if (name) form.append('name', name);
+    if (presetKey) form.append('preset_key', presetKey);
+    return request<{ imports: Array<{
+      kind: 'model' | 'image' | 'unsupported';
+      asset?: AssetSummary;
+      job?: Job;
+      filename?: string;
+      error?: string;
+    }> }>('/api/assets/import', { method: 'POST', body: form });
+  },
+
+  /** 2D 图片素材生成（LLM 优化提示词 → CogView 出图，后台任务）。 */
+  generateImage: (assetId: string, prompt: string) =>
+    request<{ job: Job }>(`/api/assets/${assetId}/generate-image`, {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    }),
+
+  /** AI 属性编辑：自然语言指令 → 结构化属性变更（白名单内）→ 应用。 */
+  aiEdit: (assetId: string, instruction: string) =>
+    request<{ summary: string; applied: Record<string, unknown>; before: Record<string, unknown> }>(
+      `/api/assets/${assetId}/ai-edit`,
+      { method: 'POST', body: JSON.stringify({ instruction }) },
+    ),
+
   /** 建资产前的预览优化（不落库）——工作台用；结果填回输入框可再编辑。 */
   enhancePromptPreview: (description: string, presetKey: string) =>
     request<EnhanceResult>('/api/assets/enhance-prompt-preview', {
