@@ -41,6 +41,7 @@ cmd = [
     "--distpath", str(dist),
     "--workpath", str(work),
     "--specpath", str(work),
+    "--paths", str(SIDEcar_DIR),
     "--clean",
     "--noconfirm",
     f"--add-data={recipes_src};recipes",
@@ -48,9 +49,11 @@ cmd = [
 
 hidden = [
     "app.config", "app.paths", "app.models", "app.store", "app.jobs",
-    "app.presets", "app.smoke",
+    "app.presets", "app.smoke", "app.telemetry", "app.knowledge",
+    "app.ai.llm",
     "app.routers.assets", "app.routers.files", "app.routers.jobs",
-    "app.routers.meta", "app.routers.settings",
+    "app.routers.meta", "app.routers.settings", "app.routers.telemetry",
+    "app.routers.ai_assist",
     "app.providers.base", "app.providers.mock", "app.providers.meshy",
     "app.providers.tripo", "app.providers.rodin", "app.providers.hunyuan3d",
     "app.providers.local_trellis",
@@ -58,6 +61,7 @@ hidden = [
     "app.tools.repair", "app.tools.decimate", "app.tools.uv", "app.tools.bake",
     "app.tools.export", "app.tools.render", "app.tools.validate", "app.tools.pipeline",
     "app.tools.blender", "app.tools.convert", "app.tools.mesh_io", "app.tools.raster",
+    "app.tools.gltf_load",
     "uvicorn.logging", "uvicorn.loops.auto",
     "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",
 ]

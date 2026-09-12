@@ -208,6 +208,8 @@ async def run_pipeline(
             payload["version_id"] = node.id
             payload["skipped_reason"] = skipped
 
+        import numpy as _np
+        print(f"[probe] after {step.value}: faces {_np.asarray(current.faces).shape} verts {_np.asarray(current.vertices).shape}")
         payload["step"] = step.value
         summary["steps"].append(payload)
         telemetry.record(
@@ -239,7 +241,11 @@ async def run_pipeline(
         size=512,
         prefer_blender=head is not None,
     )
-    summary["turntable"] = {"files": turntable.get("files", []), "method": turntable.get("method")}
+    summary["turntable"] = {
+        "files": turntable.get("files", []),
+        "method": turntable.get("method"),
+        "reason": turntable.get("reason"),
+    }
 
     progress(1.0, "管线完成")
     return summary

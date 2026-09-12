@@ -54,7 +54,8 @@ def render_turntable(
     try:
         files = raster.render_turntable(mesh, out_dir, size=size, frames=frames)
     except Exception as exc:
-        report["reason"] = f"软渲染也失败了：{type(exc).__name__}: {exc}"
+        import traceback
+        report["reason"] = f"软渲染也失败了：{type(exc).__name__}: {exc} || {traceback.format_exc()[-500:]}"
         return report
 
     report["files"] = [str(p) for p in files]

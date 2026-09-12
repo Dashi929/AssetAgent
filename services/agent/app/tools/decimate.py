@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 from typing import Any
 
+import numpy as np
 import trimesh
 
 from .mesh_io import mesh_stats
@@ -68,17 +70,26 @@ def decimate_mesh(
             # trimesh 会顺带把 UV / 顶点法线 / 材质映射一起迁移到新拓扑上，
             # 直接调底层库会把这些属性丢掉。
             #
+            # 减面前先焊接重合顶点：UV 缝/组件缝上的复制顶点位置完全重合但
+            # 索引独立，不焊接的话 quadric 简化会让每份独立塌缩，网格出现
+            # 裂纹（"部分顶点对不上"的来源）。管线默认 decimate 之后就是 UV
+            # 步（xatlas 从几何重建全部 UV），所以这里合并 UV 缝是安全的；
+            # 若单独跑 decimate，UV 会丢（无 UV 网格仍可正确渲染灰模）。
+            welded = mesh.copy()
+            with contextlib.suppress(Exception):
+                welded.merge_vertices(merge_tex=True, merge_norm=True)
+            #
             # fast-simplification 是近似收敛：一次调用可能停在预算之上
             # （实测 160k→5000 目标落在 6219）。闭环收紧：按实际比例修正
-            # 目标再来一轮，最多三轮，把"面数预算"这条硬承诺兑现。
-            simplified = mesh
+            # 目标再来一轮，最多五轮，把"面数预算"这条硬承诺兑现。
+            simplified = welded
             adjusted = target_faces
-            for _ in range(3):
-                simplified = simplified.simplify_quadric_decimation(face_count=adjusted)
-                if len(simplified.faces) <= target_faces or len(simplified.faces) >= len(mesh.faces):
+            for _ in range(5):
+                simplified = _simplify_fast(welded if simplified is welded else simplified, adjusted)
+                if len(simplified.faces) <= target_faces or len(simplified.faces) >= len(welded.faces):
                     break
                 adjusted = max(4, round(adjusted * target_faces / max(1, len(simplified.faces))))
-            if _components_exploded(mesh, simplified):
+            if _components_exploded(welded, simplified):
                 # 多组件网格（扫描件/带大量装饰小件）整体减面会把小组件炸成
                 # 碎片（mushroom_house 实测 26 组件 → 3496 组件）。
                 # 回退：逐组件独立减面再合并；组件分析也失败则保留原网格并说明。
@@ -102,8 +113,12 @@ def decimate_mesh(
                 vertices=out.vertex_matrix(), faces=out.face_matrix(), process=False
             )
     except Exception as exc:
+        import traceback
+
         report["after_faces"] = before
-        report["skipped_reason"] = f"减面失败（{name}）：{exc}"
+        report["skipped_reason"] = (
+            f"减面失败（{name}）：{exc} || {traceback.format_exc()[-600:]}"
+        )
         return mesh, report
 
     # 减面可能产生新的退化面，顺手清一遍，否则校验器会报一堆噪声
@@ -117,6 +132,22 @@ def decimate_mesh(
     report["method"] = name
     report["stats"] = mesh_stats(simplified)
     return simplified, report
+
+
+def _simplify_fast(mesh: trimesh.Trimesh, target_faces: int) -> trimesh.Trimesh:
+    """直接调 fast_simplification（绕开 trimesh 封装里 faces.view 的内存布局坑），
+    并强制数组为 C 连续的规范 dtype。UV 等视觉属性不迁移 —— 管线里 decimate
+    之后紧跟 UV 步（xatlas 从几何重建全部 UV）。"""
+    import fast_simplification
+
+    points = np.ascontiguousarray(mesh.vertices, dtype=np.float64)
+    triangles = np.ascontiguousarray(mesh.faces, dtype=np.int32)
+    vertices_out, faces_out = fast_simplification.simplify(points, triangles, target_count=target_faces)
+    return trimesh.Trimesh(
+        vertices=np.asarray(vertices_out, dtype=np.float64),
+        faces=np.asarray(faces_out, dtype=np.int64),
+        process=False,
+    )
 
 
 def _component_count(mesh: trimesh.Trimesh) -> int:

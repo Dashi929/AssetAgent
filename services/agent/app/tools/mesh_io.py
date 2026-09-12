@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,10 @@ def save_mesh(mesh: trimesh.Trimesh, path: Path | str) -> Path:
     }.get(suffix)
     if file_type is None:
         raise MeshError(f"不支持导出为 {suffix}")
+
+    if suffix in {".glb", ".gltf"}:
+        _sanitize_for_export(mesh)
+
     try:
         data = mesh.export(file_type=file_type)
     except Exception as exc:
@@ -95,7 +100,81 @@ def save_mesh(mesh: trimesh.Trimesh, path: Path | str) -> Path:
     return path
 
 
-# ------------------------------------------------------------------ 几何属性
+def _sanitize_for_export(mesh: trimesh.Trimesh) -> None:
+    """GLB 导出前的兜底清理（三件事都是 mushroom_house 实测踩出来的）：
+
+    1. 绕序统一：减面会把部分面的绕序翻反，singleSided 导出下这些面被
+       three.js 剔除，视口呈现大片黑色"内壁"；
+    2. 材质兜底：只有 UV 没有材质的网格，trimesh 会自动塞一张 2×2 灰色
+       占位贴图 × 0.4 底色系数，渲染出来近乎纯黑 —— 换成中性浅灰双面
+       clay 材质（有 UV 带 UV，没 UV 也可以只挂材质）；
+    3. 顶点法线清掉：处理链上的顶点法线可能指向混乱，让 GLTFLoader 自己按
+       面绕序重算（three.js 对无 NORMAL 的网格会 computeVertexNormals）。
+    """
+    with contextlib.suppress(Exception):
+        trimesh.repair.fix_normals(mesh, multibody=True)
+    _orient_components_outward(mesh)
+
+
+def _orient_components_outward(mesh: trimesh.Trimesh) -> None:
+    """按连通组件校正法线朝向（fix_normals 的兜底）。
+
+    fix_normals 用体积判定朝外，对几千个非水密小组件（生成模型的装饰碎件）
+    大面积判反（实测 73% 朝内，视口因背面剔除渲染成黑壳）。这里用轻量判据：
+    组件内 Σ(面法线 · (面心-组件质心)) < 0 视为朝内，翻转该组件全部面的绕序。
+    对"外凸为主"的道具组件足够可靠；个别真内凹组件由 doubleSided 材质兜底
+    （three.js 对背面片元会翻转法线，光照依旧正确）。
+    """
+    import numpy as np
+
+    with contextlib.suppress(Exception):
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        if len(faces) == 0 or len(mesh.face_adjacency) == 0:
+            return
+        from trimesh.graph import connected_components
+
+        components = connected_components(
+            mesh.face_adjacency, nodes=np.arange(len(faces)), min_len=1, engine="scipy"
+        )
+        face_normals = np.asarray(mesh.face_normals, dtype=np.float64)
+        centers = mesh.vertices[faces].mean(axis=1)
+        flip = np.zeros(len(faces), dtype=bool)
+        for component in components:
+            if len(component) < 3:
+                continue
+            comp_center = centers[component].mean(axis=0)
+            dots = np.einsum("ij,ij->i", face_normals[component], centers[component] - comp_center)
+            if dots.sum() < 0:
+                flip[component] = True
+        if flip.any():
+            # 注意：update_faces 是"删除掩码"语义，传 (F,3) 数组会被当成
+            # fancy index 产出 (F,3,3) 坐标数组（实测）。翻转绕序直接用
+            # faces setter 整体赋值：行数不变，UV/视觉属性天然对齐。
+            new_faces = faces.copy()
+            new_faces[flip] = new_faces[flip][:, [0, 2, 1]]
+            mesh.faces = new_faces
+
+    clay = trimesh.visual.material.PBRMaterial(
+        baseColorFactor=[0.62, 0.62, 0.62, 1.0],
+        roughnessFactor=0.9,
+        doubleSided=True,
+    )
+    visual = mesh.visual
+    material = getattr(visual, "material", None)
+    has_real_pbr = isinstance(material, trimesh.visual.material.PBRMaterial) and (
+        getattr(material, "baseColorTexture", None) is not None
+    )
+    # 注意：TextureVisuals(uv=...) 构造时 material 会被填成 Material() 基类实例
+    # 而不是 None —— 这个基类材质导出 GLB 时会被 trimesh 换成 2×2 灰占位图
+    # × 0.4 底色（近黑渲染的来源），所以"没有真 PBR 贴图材质"就一律兜底。
+    if isinstance(visual, trimesh.visual.texture.TextureVisuals) and not has_real_pbr:
+        uv = getattr(visual, "uv", None)
+        if uv is not None and len(uv) == len(mesh.vertices):
+            mesh.visual = trimesh.visual.texture.TextureVisuals(uv=uv, material=clay)
+        else:
+            mesh.visual = trimesh.visual.texture.TextureVisuals(material=clay)
+    elif isinstance(visual, trimesh.visual.ColorVisuals):
+        mesh.visual = trimesh.visual.texture.TextureVisuals(material=clay)# ------------------------------------------------------------------ 几何属性
 
 
 def uv_array(mesh: trimesh.Trimesh) -> np.ndarray | None:
