@@ -11,6 +11,175 @@
 
 ---
 
+## 2026-09-14 第三十五轮：摩托颜色三连修（texCoord / 空间对齐 / 软渲染黑屏）
+
+用户贴图对比：源模型是亮绿川崎，我们渲出来是黑车。第三十四轮修完网格后又追出**三个独立的
+颜色 bug**，全部修复：
+
+1. **texCoord 被无视**（gltf_load）：材质的 baseColorTexture 引用带 `texCoord` 字段指定用第几套
+   TEXCOORD（摩托 24 个 primitive 里 22 个有 3~5 套 UV），加载器永远读第 0 套 → 颜色采到错误贴图
+   区域（绿车采样全黑）。修：按 texCoord 读对应套。注意 texCoord 挂在**材质里的贴图引用**上，
+   不是 textures[] 条目上（第一版就读错了地方）。
+2. **烘焙空间不对齐**（bake）：管线把低模 normalize 过（缩放到 expected_size + 挪轴心），高模还是
+   原始尺寸/位置 —— 最近点投影全打在错误零件上。修：软件路径对高模套同款 normalize_transform；
+   Blender 脚本加 --align_pivot/--align_size 参数在场景里对齐。**对齐数学备注**：normalize 对
+   "缩放+平移"是精确幂等的（平移在轴心步骤里被精确抵消），对齐测试的 aligned diff 恰好为 0 是正常的。
+3. **软渲染带贴图整台纯黑**（raster）：`_face_base_colors` 返回 0~1 浮点色，`_render_frame` 兜底灰是
+   0~255 整数色，绘制时 `int(浮点*shade)` 全被截成 0。修：统一 0~1 再乘 shade ×255。
+
+**又一个位置传参事故（记牢）**：`bake_textures` 加新参数后，pipeline 与内部软件兜底调用仍按位置传
+`spec.pivot, spec.expected_size_m` → pivot 塞进 maps 槽、对齐静默失效。修法：maps/pivot/expected_size_m
+改 **keyword-only**（位置传参直接 TypeError，测试套件当场拦住 19 个失败）。
+
+**图集填充改逐像素 Voronoi**（scipy.cKDTree）：PIL 逐面画多边形有两个致命伤 —— 细长 UV 三角经常
+一个像素中心都盖不到（丢色）、后画的三角盖掉先画的（绿色车壳被吃成黑车实测）。Voronoi 每像素取
+UV 空间最近面颜色，无丢失无覆盖，性能可接受（6833 面 / 2048² 图集约 5 秒）。
+
+**调试方法论（本轮反复用到的判别实验）**：
+- 颜色不对先做**双约定 A/B 采样**（y=v*H vs y=(1-v)*H 各采一遍数绿）——两种都 0% 说明不是翻转，
+  是 UV/映射/空间问题；
+- 图集与渲染对不上时，**用同一批面分别采样对比**（图集中心采样 10.54% 绿 vs 渲染 0%）锁断点层级；
+- 测试场景的高模若经 `load_mesh` 再导出，材质会变 2×2 占位图（HANDOFF 老坑）——带材质的导出
+  必须 trimesh.load 起手。
+
+验证：117 passed（test_multi_material.py 9 个：含 texCoord=1 双套 UV 回归、对齐正反例、
+装配体逐组件、软件烘焙红绿图集）；重打包后真机重导摩托：缩略图/转台 = **绿色川崎**（对照源模型
+预览一致），图集绿约 3%（Voronoi 后 dev 7.7%）。视口（three.js）head GLB 内嵌贴图待用户确认。
+已知问题：软件烘焙逐面平色；Blender 缺失时无 normal/AO；eslint 未安装。
+
+---
+
+## 2026-09-13 第三十四轮：摩托复盘 —— 网格肢解修复 + 方案 A 落地（导入贴图恢复颜色）
+
+用户报障：导入的摩托网格碎掉 + 贴图颜色全没。定位出**两个独立的根因**并全部修复，方案 A（单图集
+底色烘焙）一并落地。
+
+**根因一（网格肢解）：UV 岛被当成组件。** glTF 在 UV 缝上故意复制顶点（同位置不同 UV），
+repair 的游离组件剔除用 face_adjacency 找连通分量，整车 961 个零件被看成 1.7 万个"岛"，
+最大岛之外的大多数被当垃圾删掉（17.6 万面删 9.9 万），再被 5000 面预算压成碎片。
+**根因二（贴图丢失）**：自研 GLB 加载器只读几何+UV，材质从未进入内存；`_sanitize_for_export`
+按"无真 PBR"兜底成灰 clay；烘焙只有 normal/AO 没有 base color。
+
+| 位置 | 内容 |
+|---|---|
+| `mesh_io.welded_face_components` | 新公共函数：按顶点坐标精确焊接后算连通组件（np.unique 轴0 + 面邻接边对）。**trimesh 5.1.0 的 process=True 只合并部分顶点（13.9万→7.6万），不能依赖**；`component_count` 改用它（组件统计/校验器不再报 UV 岛数） |
+| `repair._drop_stray_components` | 组件用焊接版；剔除从"二选一"改为**三条件同时满足**：面数<主体10% + 尺寸<21.5% + **不与主体膨胀包围盒（5%）相交**。装配体的螺丝/后视镜贴着车体=结构，保留；飘在旁边的碎片才删 |
+| `decimate` | 焊接组件数 > 48 视为装配体，**直接逐组件减面**（`_decimate_per_component` 重写：位置焊接消除 UV 缝假边界 + 按面数比例预算 + 两轮收敛 + remap 缓冲复用）；全局路径仅用于单体网格 |
+| `gltf_load` | `load_glb(path, with_materials=True)` 返回 `(mesh, SourceMaterialTable)`：逐面 baseColor 贴图（PIL）+ 角点 UV + sRGB 因子；metadata 记 source_material/image_count；`_build_import_node` 顺带写进版本 params |
+| `recipes/bpy/bake_textures.py` | 加 `diffuse` 通道：Cycles DIFFUSE 只开 color pass（无光照）→ `T_basecolor.png`；**修掉高模 hide_render=True**（烘焙射线走渲染可见性，隐藏=烘平色，旧 normal/AO 实为近似平图） |
+| `bake.bake_diffuse_software` | **无 Blender 兜底**：低模面中心 → trimesh.proximity 最近点 → 高模面重心 UV 采样源贴图 → 低模 UV 三角形填色 → 同构 `T_basecolor.png`。全 try/except 失败即 skipped 不炸管线 |
+| `bake.attach_baked_material` | 烘焙产物挂成 PBRMaterial（baseColor/normal/occlusion，metallic=0 rough=0.9 双面）→ bake 版本 mesh.glb 自带贴图；`bake_textures` 只认本次 OK json 的产物文件（out_dir 跨跑复用，glob 全量会混入旧图） |
+| `export._glb_has_textures` | 导出 GLB 时带贴图的版本文件**原样复制**（load→save 会经自研加载器丢材质）；无贴图才走原路径 |
+| `raster._face_base_colors` | 软渲染逐面采样 baseColorTexture（面中心 UV），缩略图/转台兜底路径有颜色；全链 UV 约定 V-up（trimesh GLTF 导出 946 行自己翻 V-down，xatlas 输出零翻转即可用 —— trimesh 官方 unwrap 同样不翻） |
+
+**V-up 约定（记牢）**：TextureVisuals.uv = V-up（原点左下）；glTF 文件 = V-down；trimesh 导入/导出两侧
+各翻一次。源 UV 被加载器翻成 V-up，软件烘焙采样源贴图用 `y=(1-v)*H`，图集绘制与缩略图采样同式。
+
+**这台机器没装 Blender** —— 之前 normal/AO 一直是静默 skip。软件底色烘焙兜底让"导入有颜色"不依赖
+Blender；装 Blender 后走 Cycles 路径（normal/AO/diffuse 全量，画质更好）。
+
+验证：115 passed（新文件 test_multi_material.py 7 个：焊接组件/统计/repair 邻近保留/装配体逐组件/
+软件烘焙红绿图集/材质 GLB 回读/源材质统计）；打包版真机重导摩托：repair 保 154k 面 477 组件 →
+逐组件减面 6837 面 → bake 版 GLB 内嵌贴图（1 材质 1 image）→ 缩略图/转台显示完整深色摩托
+（对照 trimesh 官方加载器渲染源模型：车就是黑的，烘焙忠实）。视口目检待用户空闲。
+资产校验停在 awaiting_validation 是命名规则（文件名含 `-`/小写不符 SM_ 规范），AI 属性编辑改名即可。
+已知问题：eslint 未安装；FBX 导出仍依赖 Blender；软件烘焙逐面平色、薄壁处可能串色（Blender 路径无此问题）。
+
+---
+
+## 2026-09-13 第三十三轮：归档改为删除（带二次确认）
+
+用户需求：归档功能改为删除功能，用户确认后删除。
+
+| 位置 | 内容 |
+|---|---|
+| `store.delete_asset` | 真删除：`shutil.rmtree` 整个资产目录（版本/变体/贴图/导出/任务记录全没）；替代 `archive_asset`（已删）。`AssetStatus.ARCHIVED` 枚举保留 —— 兼容旧数据展示，`list_assets` 仍过滤 archived |
+| `DELETE /api/assets/{id}` | 替代 `POST /{id}/archive`；**有 QUEUED/RUNNING 任务时 409 拒绝**（否则后台任务往被删目录写文件产出僵尸资产）；埋点 delete_asset |
+| `_discard_broken_asset` | 创建/导入失败路径（原 archive 清理）改为直接删除 —— 刚建的坏资产不值得留；删除失败不掩盖原始 400 |
+| 前端 AssetDetail | 「归档」按钮 → 「删除」（danger）；`window.confirm` 二次确认（列明不可恢复）；确认后 deleteAsset + refreshAssets + 跳回资产库 |
+| 测试 | test_store 归档测试 → 删除测试（目录消失/再删 FileNotFoundError）；test_api 归档测试 → DELETE 200/目录移除/再删 404；hunyuan 导入失败测试改名为 cleans_up（断言不变） |
+
+验证：后端 108 passed；typecheck 通过；sidecar 重建（**本轮改了 Python，必须 `python scripts/build-sidecar-only.py`**）
++ electron-builder 重打包；打包版真机验证：HTTP 建资产 → DELETE 200 → 再删 404 → 旧 archive 路由 404；
+GUI 走查确认弹窗（取消 → 资产还在；确定 → 删除生效，列表与磁盘都消失）。
+收尾：历史归档遗留的两个测试资产（queue_panel_test / old_crate，归档功能移除后会永久不可见）已删除。
+已知问题：eslint 未安装（既有）；贴图丢色根因见第三十二轮前的诊断（未修，等用户拍板方案）。
+
+---
+
+## 2026-09-13 第三十二轮：导入去掉表单 —— 拖入即入队 + 自动命名
+
+用户需求：导入模式去掉红框区域（资产名输入框、规格预设选择、开始导入按钮、提示行）；
+拖入或点击选择素材后**自动开始入队导入**，资产名自动用文件名。
+
+改动（仅前端 `Workbench.tsx`，后端零改动 —— 不传 name/preset_key 本来就是文件名 + 默认预设）：
+- `queueImport(files)`：直接调 `api.importAssets(files)`（不传 name/preset）→ 进度行入列；
+- `applyPickedFiles`：导入模式选完文件即调 `queueImport`，新建模式行为不变（存 pickedFiles）；
+- 删除 `startImport` / `importing` state / `importName` state（上一轮加的，随表单一起移除）/
+  `baseName` helper；新建按钮直接接 `submitCreate`；
+- 切到「导入」tab 时清空新建模式的选图，避免两个拖放区语义混淆；
+- 导入卡片只剩拖放区（文案改为「松手即自动开始导入 · 资产名自动取文件名」）+ 导入进度表；
+- 顺手补了导入进度行的失败原因显示（`item.error`，如「不支持的格式 .exe」之前从不显示）。
+
+导入规格预设不再可选（一律默认「道具·默认」）；如果以后要改预设，入口应在资产详情页。
+
+验证：typecheck 通过；`npm run build:all` + electron-builder 重打包（**本轮纯前端，sidecar 无需重建**）；
+打包版启动后 sidecar health OK。拖入即导入的 GUI 走查未做（用户在前台打游戏，不能抢焦点）——
+应用已挂后台，用户切过去拖个文件即可验；已由 typecheck + 代码审读覆盖自动入队路径。
+已知问题：eslint 未安装（既有）。
+
+---
+
+## 2026-09-13 第三十一轮：资产库任务队列浮窗
+
+用户需求：资产库页加一个浮动窗口，显示当前任务队列（全局后台任务：导入管线/生成/导出等）。
+
+| 位置 | 内容 |
+|---|---|
+| `app/jobs.py` | JobRunner 加 `self._jobs` 注册表（submit 时登记，完成时 `_trim_recent` 只留最近 30 条）；`recent_jobs()` 返回"进行中在前 + 完成的按时间倒序" |
+| `GET /api/jobs/queue` | 浮窗数据源：`{"jobs": [Job + asset_name + running]}`；**必须注册在 `/{job_id}` 之前**，否则 "queue" 被当 job_id 404；资产名解析失败兜底"（已删除的资产）" |
+| `api.getJobQueue` | 前端 client 方法 |
+| `components/QueuePanel.tsx` | 浮窗组件：固定右下角，1.2s 轮询；行 = 资产名（点击跳详情）+ JobBadge + 步骤/百分比 + 进度条 + message + 取消按钮；有活跃任务自动弹出，× 关闭后有**新**任务（活跃数增加）自动重新弹出；支持折叠成标题条；空闲且关闭即隐藏 |
+| `Library.tsx` | 挂载 `<QueuePanel />`（按用户要求只放资产库页） |
+| `global.css` | `.queue-panel` 系列：fixed 右下 360px 卡片、阴影、行内名称链接截断 |
+
+**关键坑（记给下个 Agent）**：
+- `npx electron-builder --win nsis` **只打包现成的 `sidecar-dist/assetagent-sidecar.exe`，不重跑 PyInstaller**。
+  改了 Python 代码必须先 `python scripts/build-sidecar-only.py` 再 electron-builder，否则打出去的是旧后端
+  （本次 `/api/jobs/queue` 在打包版上 404 就是这个原因，代码本身没问题）。前端改动才只需要 `npm run build:all`。
+- 打包/重启前先确认旧实例退干净：AssetAgent.exe 关窗后 sidecar 可能残留锁住 `sidecar-dist`，
+  electron-builder 会报 `remove ... Access is denied`。
+
+验证：后端 107 passed（含新增 `test_job_queue_lists_recent_with_asset_name`，顺带复验导入默认名=文件名）；
+typecheck 通过；sidecar 重建 + electron-builder 重打包后，打包版 HTTP 真机验证：queue 空态 →
+导入 glb → running（带资产名 queue_panel_test）→ succeeded，`/api/jobs/{id}` 参数路由不受影响。
+浮窗 UI 的视觉走查未做（验证时用户在打游戏，不能抢前台焦点）—— 应用已挂后台，切到资产库即可看到；
+测试资产 `queue_panel_test`（3D）在库里，不需要就归档。已知问题：eslint 未安装（既有）。
+
+---
+
+## 2026-09-13 第三十轮：导入资产名默认取文件名
+
+用户需求：导入的资产名默认为导入素材的名字。
+
+**根因**：后端 `POST /api/assets/import` 本来就会在 name 为空时用文件名（多文件逐个用各自文件名）；
+问题在前端 —— 工作台「新建」「导入」两个 tab 共用同一个 `name` state，新建时输入过的资产名
+残留到导入模式，单文件导入时被静默用作资产名而不是文件名；且导入框的资产名输入框从不预填。
+
+**改动**（仅前端 `apps/desktop/src/pages/Workbench.tsx`）：
+- 导入模式改用独立的 `importName` state，不再与「新建」的 `name` 互通，杜绝残留名字漏过来；
+- 选文件统一走 `applyPickedFiles`：单文件导入自动把资产名填成**文件名去扩展名**（用户可再改），
+  多文件则清空并禁用输入框（后端自动用各自文件名）；
+- `startImport` 传 `importName`；输入框留空时后端仍回退到文件名，默认行为双保险；
+- 输入框 label 改为「资产名（默认取文件名，可改；多文件自动用各自文件名）」。
+
+后端无改动。验证：`npm run typecheck` 通过；`npm run build:all` + `npx electron-builder --win nsis`
+打包成功；打包版真机走查（png 单文件 → 输入框自动填文件名去扩展名、png 两文件 → 输入框清空禁用、
+导入完成后资产行名字 = 文件名）。glb 走同一前端代码路径，未单独真机测。
+已知问题：eslint 未随 node_modules 安装（`npm run lint` 跑不起来，既有情况）。
+
+---
+
 ## 2026-09-12 第二十九轮：工作台改造 —— 新建/导入分离 + 2D 素材 + 后台队列 + AI 属性编辑
 
 用户需求落地：新建（文字/图片 → LLM 生成 2D/3D）与导入（2D/3D 素材 → LLM 改属性）
