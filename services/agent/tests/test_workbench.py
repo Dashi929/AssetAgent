@@ -98,6 +98,29 @@ def test_import_model_failure_marks_asset_failed(client):
     assert detail["asset"]["status"] == "failed"
 
 
+def test_job_queue_lists_recent_with_asset_name(client):
+    """任务队列浮窗：/api/jobs/queue 返回最近任务并带资产名；路由不被 /{job_id} 吞掉。"""
+    response = client.post(
+        "/api/assets/import",
+        files=[("files", ("sprite_q.png", make_png_bytes(), "image/png"))],
+    )
+    assert response.status_code == 202, response.text
+    imports = response.json()["imports"]
+    job_id = imports[0]["job"]["id"]
+    asset_id = imports[0]["asset"]["asset"]["id"]
+    wait_for_job(client, job_id)
+
+    queue = client.get("/api/jobs/queue")
+    assert queue.status_code == 200, queue.text
+    rows = queue.json()["jobs"]
+    row = next((j for j in rows if j["id"] == job_id), None)
+    assert row is not None, f"刚完成的任务应出现在队列里：{rows}"
+    assert row["status"] == "succeeded"
+    assert row["asset_id"] == asset_id
+    # 导入没传 name → 资产名 = 文件名去扩展名
+    assert row["asset_name"] == "sprite_q"
+
+
 # ------------------------------------------------------------------ 2D 生成
 
 

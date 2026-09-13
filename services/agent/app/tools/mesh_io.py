@@ -196,31 +196,58 @@ def face_normals(mesh: trimesh.Trimesh) -> np.ndarray:
     return normals
 
 
+def welded_face_components(mesh: trimesh.Trimesh) -> list[np.ndarray]:
+    """按**顶点位置焊接**后的连通组件（返回面索引分组）。
+
+    glTF 在 UV 缝上**故意复制顶点**（同一位置、不同 UV），直接用
+    face_adjacency 或 trimesh 的 process=True 合并找连通分量，都会把每个
+    UV 岛当成独立组件（trimesh 5.1.0 实测 process 只合并了部分顶点，
+    476 个零件的摩托被报成 27188 个"组件"）。这里只对邻接计算做位置
+    焊接，不改动网格本身；顶点坐标逐位相同才合并（glTF 复制的顶点来自
+    同一份 buffer 数据，位置严格相等）。
+    """
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    _, inverse = np.unique(vertices, axis=0, return_inverse=True)
+    welded_faces = inverse[np.asarray(mesh.faces, dtype=np.int64)]
+    if len(welded_faces) == 0:
+        return []
+
+    tri_edges = np.concatenate(
+        [welded_faces[:, [0, 1]], welded_faces[:, [1, 2]], welded_faces[:, [2, 0]]]
+    )
+    tri_edges.sort(axis=1)
+    face_of_edge = np.tile(np.arange(len(welded_faces), dtype=np.int64), 3)
+    order = np.lexsort((face_of_edge, tri_edges[:, 1], tri_edges[:, 0]))
+    sorted_edges = tri_edges[order]
+    sorted_faces = face_of_edge[order]
+    same_edge = np.all(sorted_edges[1:] == sorted_edges[:-1], axis=1)
+    pairs = np.stack([sorted_faces[:-1][same_edge], sorted_faces[1:][same_edge]], axis=1)
+    pairs = pairs[pairs[:, 0] != pairs[:, 1]]  # 退化面焊接后产生自环，去掉
+    if len(pairs) == 0:
+        return [np.arange(len(welded_faces))]
+    return trimesh.graph.connected_components(
+        pairs, nodes=np.arange(len(welded_faces)), min_len=1, engine="scipy"
+    )
+
+
 def component_count(mesh: trimesh.Trimesh) -> int:
     """几何壳体数量（连通分量）。游离小组件是生成模型的常见病。
 
-    两个坑，都实际踩过：
+    三个坑，都实际踩过：
 
     1. **不用 mesh.split()**：它会对每个分量尝试补洞（内部依赖 networkx，代价高），
        给一个只读统计带来"顺手改了几何"的副作用。这里只要一个数字。
     2. **必须先按位置焊接顶点**：UV 展开（xatlas）会在 UV 缝处复制顶点，而面邻接是
        按顶点索引算的。不焊接的话，一个几何上完整的道具会被报成"有 6 个组件" ——
        那其实是 UV 岛的个数。美术看到这个数字会以为模型坏了。
+    3. **不能依赖 trimesh 的 process=True 焊接**：5.1.0 实测它对带 UV 的网格只
+       合并部分顶点（13.9 万 → 7.6 万，UV 缝仍断开），476 个零件被报成 27188
+       个"组件"。用 welded_face_components 按坐标精确焊接。
     """
     if len(mesh.faces) > COMPONENT_ANALYSIS_LIMIT:
         return -1  # -1 = 太大没算
     try:
-        from trimesh.graph import connected_components
-
-        welded = trimesh.Trimesh(
-            vertices=np.asarray(mesh.vertices, dtype=np.float64),
-            faces=np.asarray(mesh.faces, dtype=np.int64),
-            process=True,  # process 会合并重合顶点，把 UV 缝重新焊上
-        )
-        labels = connected_components(
-            welded.face_adjacency, nodes=np.arange(len(welded.faces), dtype=np.int64)
-        )
-        return len(labels)
+        return len(welded_face_components(mesh))
     except Exception:
         return -1
 
@@ -328,4 +355,5 @@ __all__ = [
     "quad_ratio_from_file",
     "save_mesh",
     "uv_array",
+    "welded_face_components",
 ]

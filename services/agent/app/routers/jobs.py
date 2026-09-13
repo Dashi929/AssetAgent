@@ -14,6 +14,25 @@ from ..jobs import runner
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
+@router.get("/queue")
+async def job_queue() -> dict:
+    """任务队列浮窗的数据源：进行中的在前 + 最近完成的若干条，带资产名。
+
+    注意路由顺序：必须注册在 /{job_id} 之前，否则 "queue" 会被当成 job_id。
+    """
+    items: list[dict] = []
+    for job in runner.recent_jobs():
+        try:
+            asset_name = store.get_asset(job.asset_id).name
+        except Exception:  # 资产可能已被删除；任务行仍要能显示
+            asset_name = "（已删除的资产）"
+        payload = job.model_dump(mode="json")
+        payload["asset_name"] = asset_name
+        payload["running"] = runner.is_running(job.id)
+        items.append(payload)
+    return {"jobs": items}
+
+
 @router.get("/{job_id}")
 async def get_job(job_id: str) -> dict:
     job = store.find_job(job_id)

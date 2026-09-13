@@ -38,12 +38,17 @@ class ProgressReporter:
 
 
 class JobRunner:
+    # 任务队列浮窗只关心"当前"：保留最近这批就够，避免长会话内存无限涨
+    MAX_RECENT = 30
+
     def __init__(self) -> None:
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._jobs: dict[str, Job] = {}
 
     async def submit(self, asset_id: str, step: JobStep, work: Work) -> Job:
         job = store.save_job(Job(asset_id=asset_id, step=step))
         reporter = ProgressReporter(job)
+        self._jobs[job.id] = job
 
         async def _run() -> None:
             job.status = JobStatus.RUNNING
@@ -83,6 +88,7 @@ class JobRunner:
                     error=None if failure is None else str(failure)[:500],
                 )
                 self._tasks.pop(job.id, None)
+                self._trim_recent()
 
         self._tasks[job.id] = asyncio.create_task(_run())
         return job
@@ -93,6 +99,19 @@ class JobRunner:
             return False
         task.cancel()
         return True
+
+    def recent_jobs(self) -> list[Job]:
+        """进行中的在前（新提交的靠上），已完成的按结束时间倒序排在后面。"""
+        running = [j for j in self._jobs.values() if j.status in (JobStatus.QUEUED, JobStatus.RUNNING)]
+        finished = [j for j in self._jobs.values() if j.status not in (JobStatus.QUEUED, JobStatus.RUNNING)]
+        finished.sort(key=lambda j: j.finished_at or j.created_at, reverse=True)
+        return running + finished
+
+    def _trim_recent(self) -> None:
+        if len(self._jobs) <= self.MAX_RECENT:
+            return
+        keep = self.recent_jobs()[: self.MAX_RECENT]
+        self._jobs = {job.id: job for job in keep}
 
     def is_running(self, job_id: str) -> bool:
         task = self._tasks.get(job_id)

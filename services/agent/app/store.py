@@ -3,7 +3,8 @@
 设计约束（来自产品策划文档 1.3 设计原则）：
 - **永不覆盖用户文件**：源文件只读拷贝进 source/；同名产物自动追加 _v2、_v3。
 - **每个结果可追溯**：所有产物落独立目录 + 版本号，关掉应用重开状态完整。
-- **删除即归档**：archive_asset 只把目录移到 archive/，绝不真删。
+- **删除 = 连目录一起移除**（2026-09-13 起，原"删除即归档"按用户要求废弃）：
+  由前端二次确认把关，后端不做软删除。
 """
 
 from __future__ import annotations
@@ -170,12 +171,15 @@ def set_status(asset_id: str, status: AssetStatus) -> Asset:
     return patch_asset(asset_id, status=status)
 
 
-def archive_asset(asset_id: str) -> Asset:
-    """归档 = 移动目录，不删除任何文件。"""
-    asset = get_asset(asset_id)
-    asset.status = AssetStatus.ARCHIVED
-    save_asset(asset)
-    return asset
+def delete_asset(asset_id: str) -> None:
+    """真删除：资产目录连同版本/变体/贴图/导出/任务记录一起移除，不可恢复。
+
+    前端删除前有二次确认；运行中的任务由路由层负责先拒绝（见 routers/assets.delete）。
+    """
+    directory = asset_dir(asset_id)
+    if not directory.exists():
+        raise FileNotFoundError(f"资产不存在：{asset_id}")
+    shutil.rmtree(directory)
 
 
 # ------------------------------------------------------------------ 源文件
@@ -422,7 +426,7 @@ __all__ = [
     "add_source_file",
     "add_variant",
     "add_version",
-    "archive_asset",
+    "delete_asset",
     "asset_dir",
     "create_asset",
     "exports_dir",

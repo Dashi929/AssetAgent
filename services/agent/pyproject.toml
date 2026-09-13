@@ -35,6 +35,8 @@ dependencies = [
 mesh = [
   "fast-simplification>=0.1.7",
   "xatlas>=0.0.9",
+  # 软件版底色烘焙（无 Blender 兜底）用 trimesh.proximity 最近点投影，需要 rtree
+  "rtree>=1.3",
 ]
 dev = [
   "pytest>=8.3",

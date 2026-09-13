@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import { fileUrlSync } from '../api/client';
 import { useAppStore } from '../store/useAppStore';
 import { StatusBadge } from '../components/StatusBadge';
+import QueuePanel from '../components/QueuePanel';
 import type { AssetStatus } from '../api/types';
 
 const FILTERS: { key: AssetStatus | 'all'; label: string }[] = [
@@ -103,6 +104,8 @@ export function Library() {
           ))}
         </div>
       )}
+
+      <QueuePanel />
     </div>
   );
 }

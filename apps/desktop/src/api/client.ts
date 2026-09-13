@@ -162,8 +162,8 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ preset, validate_first: true, allow_failed_export: allowFailedExport }) },
     ),
 
-  archiveAsset: (assetId: string) =>
-    request<AssetSummary>(`/api/assets/${assetId}/archive`, { method: 'POST' }),
+  deleteAsset: (assetId: string) =>
+    request<{ deleted: boolean }>(`/api/assets/${assetId}`, { method: 'DELETE' }),
 
   retryAsset: (assetId: string) =>
     request<AssetSummary>(`/api/assets/${assetId}/retry`, { method: 'POST' }),
@@ -171,6 +171,9 @@ export const api = {
   // ---------------------------------------------------------------- 任务
 
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
+
+  /** 任务队列浮窗：进行中在前 + 最近完成的任务（带资产名）。 */
+  getJobQueue: () => request<{ jobs: Array<Job & { asset_name: string }> }>('/api/jobs/queue'),
 
   cancelJob: (jobId: string) => request<{ cancelled: boolean }>(`/api/jobs/${jobId}/cancel`, { method: 'POST' }),
 

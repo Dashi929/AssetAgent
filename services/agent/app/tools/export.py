@@ -28,6 +28,17 @@ def sanitize_name(name: str, fallback: str = "Asset") -> str:
     return cleaned or fallback
 
 
+def _glb_has_textures(path: Path) -> bool:
+    """这个 GLB 里有没有内嵌贴图（决定导出走复制还是加载重存）。"""
+    try:
+        from .gltf_load import _read_glb
+
+        gltf, _ = _read_glb(Path(path).read_bytes())
+        return bool(gltf.get("images"))
+    except Exception:
+        return False
+
+
 def export_asset(
     mesh: trimesh.Trimesh,
     out_dir: Path,
@@ -47,9 +58,23 @@ def export_asset(
 
     # 1) GLB —— 无条件导出。它既是前端预览的基准格式，也是通用交付格式，
     #    所以哪怕预设里没列（比如将来的纯 FBX 预设），也照样出一份。
+    #    带贴图的版本文件直接**原样复制**：head mesh.glb 已是净化过的 GLB
+    #    （烘焙后内嵌底色图集），走 load→save 会经自研加载器把材质丢掉
+    #    （它只读几何与 UV，见 gltf_load）。
     try:
-        glb_path = save_mesh(mesh, out_dir / f"{stem}.glb")
-        files.append(str(glb_path))
+        copied = False
+        if (
+            source_mesh_path is not None
+            and Path(source_mesh_path).suffix.lower() == ".glb"
+            and _glb_has_textures(Path(source_mesh_path))
+        ):
+            target = out_dir / f"{stem}.glb"
+            shutil.copyfile(source_mesh_path, target)
+            files.append(str(target))
+            copied = True
+        if not copied:
+            glb_path = save_mesh(mesh, out_dir / f"{stem}.glb")
+            files.append(str(glb_path))
     except MeshError as exc:
         warnings.append(f"GLB 导出失败：{exc}")
 

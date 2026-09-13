@@ -318,6 +318,8 @@ async def _step_bake(mesh, high_path: Path, asset_id: str, spec: SpecPreset):
 
     低模此时还没有版本目录（版本节点是在步骤跑完之后才建的），
     所以先把它落到 work/ 下的临时文件，烘焙脚本需要真实文件路径而不是内存里的网格。
+    烘完把 basecolor/normal/AO 挂回网格材质 —— bake 节点的 mesh.glb 从此自带贴图，
+    视口/缩略图/导出直接有颜色（方案 A，2026-09-13）。
     """
     work_dir = store.asset_dir(asset_id) / "work"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -331,8 +333,15 @@ async def _step_bake(mesh, high_path: Path, asset_id: str, spec: SpecPreset):
         high_path,
         out_dir,
         spec.texture_resolution,
+        pivot=spec.pivot,
+        expected_size_m=spec.expected_size_m,
     )
     textures = [Path(p) for p in report.get("files", [])]
+    if report.get("status") == "ok" and textures:
+        try:
+            mesh = await _run_off_loop(bake_tool.attach_baked_material, mesh, textures)
+        except Exception as exc:  # 挂材质失败不推翻烘焙成果，退回灰模并留档
+            report["attach_error"] = f"{type(exc).__name__}: {exc}"
     report["low_mesh"] = str(low_path)
     return mesh, report, textures
 

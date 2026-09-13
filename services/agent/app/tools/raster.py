@@ -44,6 +44,31 @@ def _shade(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
     return AMBIENT + (1.0 - AMBIENT) * lambert
 
 
+def _face_base_colors(mesh: trimesh.Trimesh, faces: np.ndarray) -> np.ndarray | None:
+    """逐面取底色：材质带 baseColorTexture 且有 UV 时，按面中心 UV 采样贴图。
+
+    每面采一个点（面中心重心 UV）对 256~512px 的缩略图/转台足够；
+    引擎级正确性交给 Blender 转台路径，这里只要"缩略图有颜色"。
+    """
+    material = getattr(mesh.visual, "material", None)
+    texture = getattr(material, "baseColorTexture", None)
+    uv = getattr(mesh.visual, "uv", None)
+    if texture is None or uv is None or not hasattr(texture, "size"):
+        return None
+    try:
+        width, height = texture.size
+        pixels = np.asarray(texture.convert("RGB"), dtype=np.float64) / 255.0
+        face_uv = np.asarray(uv, dtype=np.float64)[faces].mean(axis=1)  # (F,2) 面中心
+        u = np.mod(face_uv[:, 0], 1.0)
+        v = np.mod(face_uv[:, 1], 1.0)
+        # 图像行自上而下，UV 的 V 自下而上
+        x = np.clip((u * width).astype(np.int64), 0, width - 1)
+        y = np.clip(((1.0 - v) * height).astype(np.int64), 0, height - 1)
+        return pixels[y, x]
+    except Exception:
+        return None
+
+
 def _render_frame(
     mesh: trimesh.Trimesh,
     angle: float,
@@ -57,6 +82,8 @@ def _render_frame(
     )
     faces = np.asarray(mesh.faces, dtype=np.int64)
     shades = _shade(vertices, faces)
+    # 材质带底色贴图就按贴图走，没有才用灰模底色
+    texture_colors = _face_base_colors(mesh, faces)
 
     # 正交投影：X→屏幕横轴，Y→屏幕纵轴（翻转使 +Y 朝上），Z→深度。
     # up 轴必须是 Y：管线内部网格统一 Y-up（GLB / three.js 视口同款约定），
@@ -74,7 +101,15 @@ def _render_frame(
     draw = ImageDraw.Draw(image)
     for face_index in order:
         face = faces[face_index]
-        color = tuple(int(min(255, channel * shades[face_index])) for channel in base_color)
+        # 贴图色是 0~1 浮点、兜底灰是 0~255 整数 —— 统一成 0~1 再乘光照系数。
+        # 之前直接 int(浮点*shade) 全被截成 0，带贴图的模型在软渲染里整台纯黑。
+        if texture_colors is not None:
+            base = texture_colors[face_index]
+        else:
+            base = np.asarray(base_color, dtype=np.float64) / 255.0
+        color = tuple(
+            int(min(255, channel * shades[face_index] * 255)) for channel in base
+        )
         draw.polygon(
             [
                 (screen_x[face[0]], screen_y[face[0]]),

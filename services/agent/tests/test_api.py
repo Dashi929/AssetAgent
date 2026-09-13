@@ -271,23 +271,23 @@ def test_export_is_blocked_when_validation_fails(client, dirty_glb):
     assert allowed.status_code == 200, allowed.text
 
 
-def test_archive_keeps_files_on_disk(client):
-    created = client.post("/api/assets", json={"name": "SM_Archived"}).json()
+def test_delete_removes_asset_and_files(client):
+    """删除：目录连产物一起消失；再删一次 404。"""
+    created = client.post("/api/assets", json={"name": "SM_To_Delete"}).json()
     asset_id = created["asset"]["id"]
 
     from app import store
 
     asset_dir = store.asset_dir(asset_id)
-    archived = client.post(f"/api/assets/{asset_id}/archive")
-    assert archived.status_code == 200
-    assert archived.json()["asset"]["status"] == "archived"
-
-    # 归档只移动/标记，绝不删文件
     assert asset_dir.exists()
+
+    deleted = client.delete(f"/api/assets/{asset_id}")
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted"] is True
+
+    assert not asset_dir.exists()
     assert asset_id not in [a["asset"]["id"] for a in client.get("/api/assets").json()]
-    assert asset_id in [
-        a["asset"]["id"] for a in client.get("/api/assets?include_archived=true").json()
-    ]
+    assert client.delete(f"/api/assets/{asset_id}").status_code == 404
 
 
 def test_budget_limit_blocks_generation(client):

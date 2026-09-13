@@ -5,7 +5,7 @@
 
 用法：
     blender -b --factory-startup --python bake_textures.py -- \
-        --low low.glb --high high.glb --out ./textures --resolution 2048 --maps normal,ao
+        --low low.glb --high high.glb --out ./textures --resolution 2048 --maps normal,ao,diffuse
 """
 
 from __future__ import annotations
@@ -72,12 +72,59 @@ def ensure_target_node(obj, image: bpy.types.Image) -> None:
         other.select = other is node
 
 
+def align_high_to_low_space(high_objects: list, pivot: str, expected_size: float) -> None:
+    """把高模对齐进低模的归一化空间（与 app/tools/repair.normalize_transform 同款数学）。
+
+    低模在管线里被缩放到 expected_size 并挪了轴心；高模还保持原始尺寸/位置。
+    不对齐的话 selected-to-active 的烘焙射线全打在错误零件上。
+    """
+    import mathutils
+
+    def bbox(objs):
+        points = [
+            obj.matrix_world @ mathutils.Vector(corner)
+            for obj in objs
+            for corner in obj.bound_box
+        ]
+        if not points:
+            return None
+        return (
+            mathutils.Vector((min(p.x for p in points), min(p.y for p in points), min(p.z for p in points))),
+            mathutils.Vector((max(p.x for p in points), max(p.y for p in points), max(p.z for p in points))),
+        )
+
+    bounds = bbox(high_objects)
+    if bounds is None:
+        return
+    low_corner, high_corner = bounds
+    extents = high_corner - low_corner
+    longest = max(extents.x, extents.y, extents.z)
+    factor = expected_size / longest if expected_size > 0 else 1.0
+    center = (low_corner + high_corner) / 2
+
+    # 第一步：中心挪到原点并缩放（缩放绕原点，作用在平移之后）
+    to_origin = mathutils.Matrix.Translation(-center) @ mathutils.Matrix.Scale(factor, 4)
+    for obj in high_objects:
+        obj.matrix_world = to_origin @ obj.matrix_world
+
+    # 第二步：按轴心规则平移（缩放后的包围盒）
+    if pivot == "bottom_center":
+        bounds = bbox(high_objects)
+        low_corner, high_corner = bounds
+        shift = mathutils.Vector(
+            (-(low_corner.x + high_corner.x) / 2, -low_corner.y, -(low_corner.z + high_corner.z) / 2)
+        )
+        for obj in high_objects:
+            obj.matrix_world = mathutils.Matrix.Translation(shift) @ obj.matrix_world
+
+
 def bake_map(
     low_objects: list,
     high_objects: list,
     image: bpy.types.Image,
     bake_type: str,
     samples: int,
+    color_pass_only: bool = False,
 ) -> None:
     scene = bpy.context.scene
     scene.render.engine = "CYCLES"
@@ -89,6 +136,12 @@ def bake_map(
     bake.cage_extrusion = 0.05
     bake.margin = 16
     bake.use_clear = True
+    if color_pass_only:
+        # DIFFUSE 只烘 albedo（反照率），不带直接/间接光照 ——
+        # 带光照烘出来的是"上了色的成品图"，进引擎再打光就叠了两遍光
+        bake.use_pass_direct = False
+        bake.use_pass_indirect = False
+        bake.use_pass_color = True
 
     bpy.ops.object.select_all(action="DESELECT")
     for obj in low_objects:
@@ -135,9 +188,16 @@ def main() -> int:
     if high_path and os.path.exists(high_path):
         high_objects = import_mesh(high_path)
         high_objects = list(bpy.context.selected_objects)
-        # 高模只作为烘焙源，渲染时不需要它出现
+        # 高模只作为烘焙射线源。注意不能 hide_render：selected-to-active 的
+        # 烘焙射线走渲染可见性，隐藏了高模射线就打不到它，烘出来全是平色
+        # （2026-09-13 复盘：之前一直 hide_render=True，normal/AO 实为近似平图）。
         for obj in high_objects:
-            obj.hide_render = True
+            obj.hide_render = False
+            obj.hide_viewport = False
+        # 高模对齐进低模的归一化空间（低模在管线里被缩放+挪过轴心）
+        align_size = float(args.get("align_size", "0") or 0)
+        if align_size > 0:
+            align_high_to_low_space(high_objects, args.get("align_pivot", "bottom_center"), align_size)
 
     produced: list[str] = []
     for bake_name in maps:
@@ -149,6 +209,11 @@ def main() -> int:
             image = new_bake_image("bake_ao", resolution, non_color=True)
             bake_map(low_objects, high_objects, image, "AO", samples=16)
             produced.append(save_image(image, os.path.join(out_dir, "T_ao.png")))
+        elif bake_name == "diffuse":
+            # 方案 A：把源模型（可能几十个材质）的底色烘成低模 UV 上的一张图集
+            image = new_bake_image("bake_basecolor", resolution, non_color=False)
+            bake_map(low_objects, high_objects, image, "DIFFUSE", samples=1, color_pass_only=True)
+            produced.append(save_image(image, os.path.join(out_dir, "T_basecolor.png")))
         elif bake_name == "curvature":
             # curvature 在 Cycles 里没有直接 bake type，用 AO 反相近似，够美术判断转折
             image = new_bake_image("bake_curvature", resolution, non_color=True)

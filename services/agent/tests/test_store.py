@@ -2,10 +2,12 @@
 
 重点验证两条不可违背的约定：
 1. **永不覆盖** —— unique_path 遇到同名文件必须另起名字，而不是盖掉。
-2. **删除即归档** —— archive 只移动目录，源文件必须还在。
+2. **删除 = 真删除** —— delete_asset 连目录带产物一起移除（前端负责二次确认）。
 """
 
 from __future__ import annotations
+
+import pytest
 
 from app import store
 from app.models import AssetStatus, VersionNode, VersionOp
@@ -69,19 +71,24 @@ def test_version_tree_keeps_history(tmp_path):
     assert store.head_version(asset.id).id == second.id
 
 
-def test_archive_moves_but_does_not_delete(tmp_path):
+def test_delete_removes_everything(tmp_path):
+    """删除 = 连目录带所有产物一起移除（2026-09-13 起，替代原"删除即归档"）。"""
     asset = store.create_asset(name="SM_Prop")
     store.write_source_bytes(asset.id, "concept.png", b"pixels")
     asset_dir = store.asset_dir(asset.id)
+    assert asset_dir.exists()
 
-    store.archive_asset(asset.id)
+    store.delete_asset(asset.id)
 
-    assert store.get_asset(asset.id).status == AssetStatus.ARCHIVED
-    assert asset_dir.exists()  # 目录还在，文件一个没少
-    assert len(store.get_asset(asset.id).source_files) == 1
-    # 默认列表不再包含已归档资产
+    assert not asset_dir.exists()
+    with pytest.raises(FileNotFoundError):
+        store.get_asset(asset.id)
     assert asset.id not in [a.id for a in store.list_assets()]
-    assert asset.id in [a.id for a in store.list_assets(include_archived=True)]
+
+
+def test_delete_missing_asset_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        store.delete_asset("asset_does_not_exist")
 
 
 def test_list_assets_skips_corrupted_entries(tmp_path):

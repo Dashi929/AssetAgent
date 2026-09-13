@@ -428,6 +428,65 @@ table.rules tr.clickable:hover {
   transition: width 0.2s ease;
 }
 
+/* ---------------- 任务队列浮窗（资产库右下角） ---------------- */
+
+.queue-panel {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  width: 360px;
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 32px rgba(44, 44, 42, 0.22);
+  padding: 12px 14px;
+  z-index: 60;
+}
+.queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex: none;
+}
+.queue-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 2px;
+}
+.queue-row .row {
+  gap: 6px;
+  margin-bottom: 5px;
+}
+.queue-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-weight: 500;
+  cursor: pointer;
+}
+.queue-name:hover {
+  text-decoration: underline;
+}
+.queue-msg {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 5px;
+}
+
 .banner {
   border-radius: var(--radius-md);
   padding: 10px 12px;

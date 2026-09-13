@@ -12,27 +12,32 @@ from typing import Any
 import numpy as np
 import trimesh
 
-from .mesh_io import mesh_stats
+from .mesh_io import mesh_stats, welded_face_components
 
-# 小于主体这个比例的组件视为"垃圾"，直接剔除
+# 小于主体这个比例的组件视为"垃圾"，直接剔除（还要同时满足"远离主体"才删）
 COMPONENT_FACE_RATIO = 0.10
 COMPONENT_VOLUME_RATIO = 0.01
+# 主体包围盒按自身对角线的这个比例向外膨胀；膨胀盒内的小组件一律保留
+MAIN_BBOX_INFLATE = 0.05
+
+
+def _bbox_overlap(a_low, a_high, b_low, b_high) -> bool:
+    return bool(np.all(a_low <= b_high) and np.all(b_low <= a_high))
 
 
 def _drop_stray_components(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, int, str | None]:
-    """保留主体，剔除游离小组件。返回 (mesh, 剔除数量, 失败原因)。
+    """只剔除"又小、又小、又远离主体"的游离垃圾，返回 (mesh, 剔除数量, 失败原因)。
 
-    用 face 邻接连通分量 + 面掩码筛选，**不构建子网格对象** —— 之前用
-    mesh.split()，在几万个组件的网格上直接内存爆炸（mushroom_house 实测），
-    而异常当年被静默吞掉，碎片原样流进减面被炸成"爆炸"渲染。
+    组件划分用 welded_face_components（UV 岛不是组件 —— 2026-09-13 摩托复盘：
+    旧实现按 face_adjacency 找组件，glTF 的 UV 缝复制顶点把整车拆成 1.7 万个
+    "岛"，被当垃圾删掉 9.9 万个面）。剔除必须**同时满足**：面数 < 主体的 10%、
+    包围盒对角线 < 主体的 21.5%、且不与主体膨胀包围盒（对角线 ×
+    MAIN_BBOX_INFLATE）相交。第三个条件是摩托复盘加上的：装配体（整车 979
+    零件）的螺丝、后视镜、徽标又小又少面，但都嵌在车体附近 —— 它们是结构，
+    不是垃圾；飘在主体旁边的碎片（mushroom_house 实测偏移 0.9 的方块）才是垃圾。
     """
     try:
-        adjacency = mesh.face_adjacency
-        if len(adjacency) == 0:
-            return mesh, 0, None
-        components = trimesh.graph.connected_components(
-            adjacency, nodes=np.arange(len(mesh.faces)), min_len=1, engine="scipy"
-        )
+        components = welded_face_components(mesh)
     except Exception as exc:
         return mesh, 0, f"{type(exc).__name__}: {str(exc)[:120]}"
     if len(components) <= 1:
@@ -40,10 +45,10 @@ def _drop_stray_components(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, int,
 
     main = max(components, key=len)
     main_faces = max(1, len(main))
-    # 体积判据的近似：直接构建几千个子网格算封闭体积不可行（内存），
-    # 用组件包围盒对角线长度替代 —— 相对主体的比例语义不变（大小件判据）
     main_points = mesh.vertices[np.unique(mesh.faces[main])]
-    main_extent = float(np.linalg.norm(main_points.max(axis=0) - main_points.min(axis=0)))
+    main_low, main_high = main_points.min(axis=0), main_points.max(axis=0)
+    main_extent = float(np.linalg.norm(main_high - main_low))
+    inflate = main_extent * MAIN_BBOX_INFLATE
 
     keep = np.zeros(len(mesh.faces), dtype=bool)
     keep[main] = True
@@ -58,6 +63,9 @@ def _drop_stray_components(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, int,
         extent = float(np.linalg.norm(points.max(axis=0) - points.min(axis=0)))
         if main_extent > 0 and extent / main_extent >= COMPONENT_VOLUME_RATIO ** (1 / 3):
             keep[component] = True
+            continue
+        if _bbox_overlap(main_low - inflate, main_high + inflate, points.min(axis=0), points.max(axis=0)):
+            keep[component] = True  # 贴着主体的小零件：保留
             continue
         dropped += 1
 

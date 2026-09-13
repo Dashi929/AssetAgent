@@ -2,8 +2,8 @@
  * 工作台 —— 两个入口：
  *
  * - **新建**：文字或图片出发，用 LLM 优化提示词后生成全新的 2D 图片或 3D 模型素材；
- * - **导入**：拖入 2D/3D 素材文件，后台队列自动处理（模型自动跑整条管线），
- *   完成后通知并引导跳转到预览/编辑模式。
+ * - **导入**：拖入 2D/3D 素材文件**即自动入队**（资产名默认取文件名，后台队列自动处理，
+ *   模型自动跑整条管线），完成后通知并引导跳转到预览/编辑模式。
  *
  * 两条入口都会在资产库生成资产；资产详情页是预览/编辑模式。
  */
@@ -26,6 +26,7 @@ interface ImportRow {
   assetName?: string;
   status: 'pending' | 'succeeded' | 'failed';
   kind?: string;
+  error?: string;
 }
 
 export function Workbench() {
@@ -47,7 +48,6 @@ export function Workbench() {
   const [enhanceInfo, setEnhanceInfo] = useState('');
   const [estimateProvider, setEstimateProvider] = useState('');
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
-  const [importing, setImporting] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(
     () => localStorage.getItem(ONBOARDING_KEY) !== '1',
   );
@@ -89,6 +89,42 @@ export function Workbench() {
   );
   const readyProviders = providerList.filter((p) => p.has_key);
 
+  // 导入模式：拖入/选择即入队（资产名自动用文件名，规格用默认预设），无需再点按钮。
+  const queueImport = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      try {
+        const result = await api.importAssets(files);
+        await refreshAssets();
+        const rows: ImportRow[] = result.imports.map((item) => ({
+          filename: item.filename ?? item.asset?.asset.name ?? '未命名',
+          jobId: item.job?.id ?? '',
+          assetId: item.asset?.asset.id,
+          assetName: item.asset?.asset.name,
+          status: item.kind === 'unsupported' ? 'failed' : 'pending',
+          kind: item.kind,
+          error: item.error,
+        }));
+        setImportRows((prev) => [...prev, ...rows]);
+      } catch (error) {
+        setError(error instanceof ApiError ? error.message : '导入失败，请稍后重试。');
+      }
+    },
+    [refreshAssets, setError],
+  );
+
+  // 选文件统一入口：导入模式直接入队；新建模式存起来等「开始生成」。
+  const applyPickedFiles = useCallback(
+    (files: File[]) => {
+      if (mode === 'import') {
+        void queueImport(files);
+        return;
+      }
+      setPickedFiles(files);
+    },
+    [mode, queueImport],
+  );
+
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
@@ -96,16 +132,16 @@ export function Workbench() {
       const files = Array.from(event.dataTransfer.files);
       if (files.length === 0) return;
       // 导入模式支持 2D/3D 混合多选；新建只收概念图
-      setPickedFiles(mode === 'create' ? files : files);
+      applyPickedFiles(files);
     },
-    [mode],
+    [applyPickedFiles],
   );
 
   const openFileDialog = () => inputRef.current?.click();
 
   const onInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
-    if (files.length) setPickedFiles(files);
+    if (files.length) applyPickedFiles(files);
     // 清空 value，否则同一个文件第二次选不会触发 change
     event.target.value = '';
   };
@@ -155,33 +191,7 @@ export function Workbench() {
     navigate(`/asset/${created.asset.id}`);
   };
 
-  // ---------------------------------------------------- 导入（后台队列）
-
-  const startImport = async () => {
-    if (pickedFiles.length === 0) {
-      setError('请先拖入要导入的 2D/3D 素材文件。');
-      return;
-    }
-    setImporting(true);
-    try {
-      const result = await api.importAssets(pickedFiles, name.trim());
-      await refreshAssets();
-      const rows: ImportRow[] = result.imports.map((item) => ({
-        filename: item.filename ?? item.asset?.asset.name ?? '未命名',
-        jobId: item.job?.id ?? '',
-        assetId: item.asset?.asset.id,
-        assetName: item.asset?.asset.name,
-        status: item.kind === 'unsupported' ? 'failed' : 'pending',
-        kind: item.kind,
-      }));
-      setImportRows((prev) => [...prev, ...rows]);
-      setPickedFiles([]);
-    } catch (error) {
-      setError(error instanceof ApiError ? error.message : '导入失败，请稍后重试。');
-    } finally {
-      setImporting(false);
-    }
-  };
+  // ---------------------------------------------------- 导入（拖入即入队）
 
   // 导入任务的轮询：所有行都到终态后停止，并刷新资产库
   useEffect(() => {
@@ -219,11 +229,6 @@ export function Workbench() {
   const pendingImports = importRows.filter((r) => r.status === 'pending').length;
   const doneImports = importRows.filter((r) => r.status === 'succeeded').length;
 
-  const submit = async () => {
-    if (mode === 'import') return startImport();
-    return submitCreate();
-  };
-
   return (
     <div>
       <div className="page-head">
@@ -235,7 +240,14 @@ export function Workbench() {
           <button className={mode === 'create' ? 'primary' : ''} onClick={() => setMode('create')}>
             新建
           </button>
-          <button className={mode === 'import' ? 'primary' : ''} onClick={() => setMode('import')}>
+          <button
+            className={mode === 'import' ? 'primary' : ''}
+            onClick={() => {
+              // 清掉新建模式的选图，避免两个拖放区语义混了
+              setPickedFiles([]);
+              setMode('import');
+            }}
+          >
             导入
           </button>
         </div>
@@ -426,7 +438,7 @@ export function Workbench() {
             <div className="row" style={{ marginTop: 14 }}>
               <button
                 className="primary"
-                onClick={submit}
+                onClick={submitCreate}
                 disabled={isImageOutput && !prompt.trim()}
                 title={isImageOutput && !prompt.trim() ? '2D 生成需要一句描述' : undefined}
               >
@@ -459,16 +471,11 @@ export function Workbench() {
               onClick={openFileDialog}
               style={{ cursor: 'pointer' }}
             >
-              <div style={{ fontSize: 14 }}>拖入 2D / 3D 素材文件，或点击选择（可多选混合）</div>
+              <div style={{ fontSize: 14 }}>拖入 2D / 3D 素材文件，或点击选择 —— 松手即自动开始导入</div>
               <div className="hint">
-                3D：glb / gltf / obj / fbx / ply / stl —— 导入后自动跑完整后处理管线；
-                2D：png / jpg / webp / bmp —— 导入后即可用 AI 编辑属性
+                资产名自动取文件名；3D：glb / gltf / obj / fbx / ply / stl 自动跑完整后处理管线，
+                2D：png / jpg / webp / bmp 导入后即可用 AI 编辑属性
               </div>
-              {pickedFiles.length > 0 && (
-                <div style={{ marginTop: 10 }} className="mono">
-                  已选 {pickedFiles.length} 个文件：{pickedFiles.map((f) => f.name).join('、')}
-                </div>
-              )}
               <input
                 ref={inputRef}
                 type="file"
@@ -478,38 +485,6 @@ export function Workbench() {
                 onChange={onInputChange}
               />
             </div>
-            <div className="row" style={{ marginTop: 14 }}>
-              <label style={{ flex: '1 1 240px' }}>
-                <div className="muted">
-                  资产名（仅单文件导入时使用；多文件自动用文件名）
-                </div>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="SM_Imported_Prop"
-                />
-              </label>
-              <label style={{ flex: '1 1 220px' }}>
-                <div className="muted">规格预设（仅对 3D 网格生效）</div>
-                <select value={activePresetKey} onChange={(e) => setPresetKey(e.target.value)}>
-                  {presetList.map(([key, preset]) => (
-                    <option key={key} value={key}>
-                      {preset.name}（{preset.face_budget} 面 / {preset.target_engine}）
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                className="primary"
-                onClick={startImport}
-                disabled={importing || pickedFiles.length === 0}
-              >
-                {importing ? '导入中…' : `开始导入${pickedFiles.length ? `（${pickedFiles.length} 个文件）` : ''}`}
-              </button>
-            </div>
-            <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
-              导入在后台队列执行（模型会自动跑完整管线），可以随时切到其它页面，完成后这里会通知。
-            </p>
           </div>
 
           {importRows.length > 0 && (
@@ -528,7 +503,11 @@ export function Workbench() {
                       <td>
                         {row.status === 'pending' && <span className="badge">后台处理中…</span>}
                         {row.status === 'succeeded' && <span className="badge pass">导入完成</span>}
-                        {row.status === 'failed' && <span className="badge fail">失败</span>}
+                        {row.status === 'failed' && (
+                          <span className="badge fail" title={row.error}>
+                            {row.error ? `失败 · ${row.error}` : '失败'}
+                          </span>
+                        )}
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         {row.status === 'succeeded' && row.assetId && (

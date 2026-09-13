@@ -92,7 +92,7 @@ def test_import_mesh_rejects_unknown_suffix(client):
     assert ".max" in response.json()["detail"]
 
 
-def test_import_fbx_no_converter_returns_400_and_archives(client, monkeypatch):
+def test_import_fbx_no_converter_returns_400_and_cleans_up(client, monkeypatch):
     """内置转换器缺失且无 Blender：400 人话，且资产不留在处理中状态。"""
     _no_ufbx(monkeypatch)
     monkeypatch.setattr(blender, "available", lambda: False)
@@ -104,7 +104,7 @@ def test_import_fbx_no_converter_returns_400_and_archives(client, monkeypatch):
     assert response.status_code == 400
     assert "另存为 OBJ / GLB" in response.json()["detail"]  # 给了替代路径
 
-    # 资产已被归档（列表接口默认不含归档），而不是以 PROCESSING 挂着误导用户
+    # 导入失败的资产已被直接删除（2026-09-13 起不再归档），而不是以 PROCESSING 挂着误导用户
     assert client.get("/api/assets").json() == []
 
 

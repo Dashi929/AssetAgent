@@ -19,7 +19,8 @@ import type { Locator, VersionNode } from '../api/types';
 export function AssetDetail() {
   const { assetId = '' } = useParams();
   const navigate = useNavigate();
-  const { detail, presets, job, openAsset, trackJob, clearJob, handle, settings } = useAppStore();
+  const { detail, presets, job, openAsset, trackJob, clearJob, handle, settings, refreshAssets } =
+    useAppStore();
 
   const [activeVersionId, setActiveVersionId] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<number[]>([]);
@@ -134,12 +135,18 @@ export function AssetDetail() {
     }
   };
 
-  const archive = async () => {
-    await handle(async () => {
-      await api.archiveAsset(asset.id);
-      navigate('/library');
+  const remove = async () => {
+    // 删除不可恢复（版本/贴图/导出全没），必须用户明确确认
+    const confirmed = window.confirm(
+      `确定删除「${asset.name}」吗？\n所有版本、贴图、导出记录都会被删掉，此操作不可恢复。`,
+    );
+    if (!confirmed) return;
+    const done = await handle(async () => {
+      await api.deleteAsset(asset.id);
+      await refreshAssets();
       return true;
     });
+    if (done) navigate('/library');
   };
 
   return (
@@ -186,8 +193,8 @@ export function AssetDetail() {
               </button>
             </>
           )}
-          <button className="danger" onClick={archive}>
-            归档
+          <button className="danger" onClick={remove}>
+            删除
           </button>
         </div>
       </div>

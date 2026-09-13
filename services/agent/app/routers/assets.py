@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import time
 from datetime import UTC
@@ -25,6 +26,7 @@ from ..models import (
     ExportBody,
     ExportRecord,
     GenerateBody,
+    JobStatus,
     JobStep,
     PickVariantBody,
     PipelineBody,
@@ -105,6 +107,15 @@ def _require_asset(asset_id: str) -> Asset:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _discard_broken_asset(asset_id: str) -> None:
+    """创建/导入失败的资产直接删掉（刚建的、不可用，归档只会让库里积灰）。
+
+    删除失败不掩盖原始错误 —— 400 的 detail 才是用户要看的。
+    """
+    with contextlib.suppress(Exception):
+        store.delete_asset(asset_id)
+
+
 def _image_sources(asset: Asset) -> list[Path]:
     return [Path(p) for p in asset.source_files if Path(p).suffix.lower() in IMAGE_SUFFIXES]
 
@@ -173,7 +184,7 @@ async def create_asset_with_images(
         saved += 1
 
     if saved == 0:
-        store.archive_asset(asset.id)
+        _discard_broken_asset(asset.id)
         raise HTTPException(status_code=400, detail="没有读到任何有效的图片内容。")
 
     telemetry.record("create_asset", asset_id=asset.id, source=asset.source, images=saved)
@@ -202,7 +213,7 @@ async def create_asset_from_mesh(
         node = _build_import_node(asset.id, target, suffix)
     except MeshError as exc:
         telemetry.record("import_mesh", asset_id=asset.id, suffix=suffix, ok=False)
-        store.archive_asset(asset.id)
+        _discard_broken_asset(asset.id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     store.add_version(node)
@@ -230,6 +241,13 @@ def _build_import_node(asset_id: str, target: Path, suffix: str) -> VersionNode:
         node.params["converted_from"] = str(target)
         node.label = "导入 FBX（已转 GLB 工作副本）"
     node.mesh_path = str(mesh_path)
+    if suffix in (".glb", ".gltf", ".fbx"):
+        with contextlib.suppress(Exception):
+            mesh = load_mesh(mesh_path)
+            node.params["source_material_count"] = int(
+                mesh.metadata.get("source_material_count", 0)
+            )
+            node.params["source_image_count"] = int(mesh.metadata.get("source_image_count", 0))
     return node
 
 
@@ -643,11 +661,25 @@ async def rollback_to_version(asset_id: str, body: RollbackBody) -> dict[str, An
     return _asset_summary(store.get_asset(asset_id))
 
 
-@router.post("/{asset_id}/archive")
-async def archive(asset_id: str) -> dict[str, Any]:
-    """归档。只移动目录，不删除任何文件。"""
+@router.delete("/{asset_id}")
+async def delete(asset_id: str) -> dict[str, Any]:
+    """删除资产：连目录带所有产物一起移除，不可恢复（前端有二次确认）。
+
+    有任务在跑时拒绝删除 —— 否则后台任务会往被删目录里写文件，产出僵尸资产。
+    """
     _require_asset(asset_id)
-    return _asset_summary(store.archive_asset(asset_id))
+    running = [
+        job for job in store.list_jobs(asset_id)
+        if runner.is_running(job.id) and job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
+    ]
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail="这个资产还有任务在后台处理，请等它结束（或取消任务）后再删除。",
+        )
+    store.delete_asset(asset_id)
+    telemetry.record("delete_asset", asset_id=asset_id)
+    return {"deleted": True, "asset_id": asset_id}
 
 
 @router.post("/{asset_id}/retry")

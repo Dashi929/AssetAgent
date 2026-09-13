@@ -21,13 +21,16 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import io
 import json
 import struct
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import trimesh
 import trimesh.visual.texture
+from PIL import Image as PILImage
 
 from .mesh_io import MeshError
 
@@ -209,8 +212,79 @@ def _check_unsupported(gltf: dict) -> None:
             )
 
 
-def load_glb(path: Path | str) -> trimesh.Trimesh:
-    """加载 GLB/GLTF 为单个合并网格（世界变换已应用）。"""
+@dataclass
+class SourceMaterialTable:
+    """高模逐面的底色来源（软件版底色烘焙用）。
+
+    face_texture[i] 是第 i 个面的 baseColor 贴图；为 None 时用 face_factors[i]
+    的材质底色（glTF 因子是线性空间，这里已转 sRGB 方便直接采样）。
+    face_uvs 是逐面角点 UV（V 已按加载器约定翻转），与合并网格的面顺序对齐。
+    """
+
+    face_texture: list  # list[PIL.Image | None]
+    face_uvs: np.ndarray  # (F, 3, 2)
+    face_factors: np.ndarray  # (F, 3) 0~1 sRGB
+
+
+def _decode_images(gltf: dict, buffers: list[bytes]) -> list:
+    """解出 GLB 里的全部图片（按 images[] 顺序，解不出的位置为 None）。"""
+    images: list = []
+    for image in gltf.get("images", []):
+        data: bytes | None = None
+        uri = image.get("uri")
+        if uri and uri.startswith("data:"):
+            with contextlib.suppress(Exception):
+                data = base64.b64decode(uri.split(",", 1)[-1])
+        elif "bufferView" in image:
+            view = gltf["bufferViews"][image["bufferView"]]
+            buffer_bytes = buffers[view.get("buffer", 0)]
+            start = view.get("byteOffset", 0)
+            data = buffer_bytes[start : start + view.get("byteLength", 0)]
+        if data is None:
+            images.append(None)
+            continue
+        try:
+            images.append(PILImage.open(io.BytesIO(data)).convert("RGB"))
+        except Exception:
+            images.append(None)
+    return images
+
+
+def _material_basecolor(gltf: dict) -> dict[int, tuple[int | None, np.ndarray | None, int]]:
+    """材质索引 → (baseColor 贴图的 images 索引 | None, sRGB 底色因子 | None, texCoord 套号)。
+
+    glTF 的贴图定义带 texCoord 字段指定用第几套 TEXCOORD（默认 0）。Sketchfab
+    导出常给一个 primitive 配 3~5 套 UV（光照贴图/蒙皮用），颜色贴图往往不在
+    第 0 套 —— 无视这个字段会让整车的颜色采到错误贴图区域（绿车变黑车实测）。
+    注意 texCoord 挂在**材质里的贴图引用**上（baseColorTexture.texCoord），
+    不是 textures[] 条目上。
+    """
+    textures = gltf.get("textures", [])
+    table: dict[int, tuple[int | None, np.ndarray | None, int]] = {}
+    for index, material in enumerate(gltf.get("materials", [])):
+        pbr = material.get("pbrMetallicRoughness") or {}
+        texture_ref = pbr.get("baseColorTexture")
+        image_index: int | None = None
+        tex_coord = 0
+        if texture_ref is not None:
+            source = textures[texture_ref.get("index", 0)].get("source")
+            image_index = int(source) if source is not None else None
+            tex_coord = int(texture_ref.get("texCoord", 0) or 0)
+        factor = pbr.get("baseColorFactor")
+        factor_srgb = None
+        if factor and len(factor) >= 3:
+            # glTF 因子是线性空间，转 sRGB 后贴图采样同域
+            factor_srgb = np.power(np.clip(np.asarray(factor[:3], dtype=np.float64), 0.0, 1.0), 1 / 2.2)
+        table[index] = (image_index, factor_srgb, tex_coord)
+    return table
+
+
+def load_glb(path: Path | str, with_materials: bool = False):
+    """加载 GLB/GLTF 为单个合并网格（世界变换已应用）。
+
+    with_materials=True 时返回 (mesh, SourceMaterialTable)：管线加载保持 False
+    （省内存），软件版底色烘焙用 True 拿逐面贴图与 UV。
+    """
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix == ".glb":
@@ -237,6 +311,10 @@ def load_glb(path: Path | str) -> trimesh.Trimesh:
     all_uvs: list[np.ndarray] = []
     warnings: list[str] = []
     vertex_offset = 0
+    face_texture_ids: list[int] = []
+    face_uvs_per_primitive: list[np.ndarray] = []
+    material_basecolor = _material_basecolor(gltf) if with_materials else {}
+    images = _decode_images(gltf, buffers) if with_materials else []
 
     for node_index, node in enumerate(gltf.get("nodes", [])):
         if "mesh" not in node:
@@ -271,6 +349,15 @@ def load_glb(path: Path | str) -> trimesh.Trimesh:
             vertex_offset += len(positions)
 
             uv_index = primitive["attributes"].get("TEXCOORD_0")
+            if with_materials:
+                # 颜色贴图可能在任意一套 TEXCOORD 上（材质 texCoord 字段指定）
+                material_index = primitive.get("material")
+                image_index, _factor, tex_coord = material_basecolor.get(
+                    material_index, (None, None, 0)
+                )
+                color_uv_index = primitive["attributes"].get(f"TEXCOORD_{tex_coord}")
+                if color_uv_index is not None:
+                    uv_index = color_uv_index
             if uv_index is not None:
                 uv = reader.read(uv_index)
                 uv = uv.astype(np.float64)
@@ -279,6 +366,21 @@ def load_glb(path: Path | str) -> trimesh.Trimesh:
                 take = min(len(uv), len(positions))
                 uvs[:take] = uv[:take]
                 all_uvs.append(uvs)
+            else:
+                uvs = None
+
+            if with_materials:
+                # 逐面记录底色来源与角点 UV（与合并网格的面顺序对齐）
+                image_index, _factor, _ = material_basecolor.get(
+                    primitive.get("material"), (None, None, 0)
+                )
+                if uvs is None or image_index is None:
+                    image_index = -1  # 没贴图或没 UV 的面走材质底色
+                face_texture_ids.extend([image_index] * len(faces_local))
+                if uvs is not None:
+                    face_uvs_per_primitive.append(uvs[faces_local])
+                else:
+                    face_uvs_per_primitive.append(np.zeros((len(faces_local), 3, 2)))
 
     if not all_positions:
         raise MeshError(
@@ -295,4 +397,42 @@ def load_glb(path: Path | str) -> trimesh.Trimesh:
             mesh.visual = trimesh.visual.texture.TextureVisuals(uv=np.vstack(all_uvs))
     if warnings:
         mesh.metadata["import_warnings"] = sorted(set(warnings))
-    return mesh
+    # 本加载器只取几何与 UV，材质/贴图由烘焙步（diffuse → 图集）转移；
+    # 记下源文件的材质规模供详情页展示与诊断
+    mesh.metadata["source_material_count"] = len(gltf.get("materials", []))
+    mesh.metadata["source_image_count"] = len(gltf.get("images", []))
+    if not with_materials:
+        return mesh
+
+    # 逐图元回填材质底色因子（面顺序与合并网格对齐；贴图面一般为白色系数，
+    # 采样时 factor × texel，无贴图面直接用因子当底色）
+    factors = np.ones((len(faces), 3), dtype=np.float64)
+    row = 0
+    for node_index, node in enumerate(gltf.get("nodes", [])):
+        if "mesh" not in node:
+            continue
+        for primitive in gltf_meshes[node["mesh"]].get("primitives", []):
+            if primitive.get("mode", _MODE_TRIANGLES) != _MODE_TRIANGLES:
+                continue
+            indices_index = primitive.get("indices")
+            if indices_index is None:
+                count = gltf["accessors"][primitive["attributes"]["POSITION"]]["count"] // 3
+            else:
+                count = gltf["accessors"][indices_index]["count"] // 3
+            _, factor, _ = material_basecolor.get(primitive.get("material"), (None, None, 0))
+            if factor is not None:
+                factors[row : row + count] = factor
+            row += count
+    texture_per_face = [
+        images[i] if i is not None and 0 <= i < len(images) else None for i in face_texture_ids
+    ]
+    table = SourceMaterialTable(
+        face_texture=texture_per_face,
+        face_uvs=(
+            np.concatenate(face_uvs_per_primitive)
+            if face_uvs_per_primitive
+            else np.zeros((0, 3, 2))
+        ),
+        face_factors=factors,
+    )
+    return mesh, table

@@ -62,6 +62,9 @@ hidden = [
     "app.tools.export", "app.tools.render", "app.tools.validate", "app.tools.pipeline",
     "app.tools.blender", "app.tools.convert", "app.tools.mesh_io", "app.tools.raster",
     "app.tools.gltf_load",
+    # trimesh.proximity 的最近点查询（软件版底色烘焙）依赖 rtree，是惰性导入，
+    # 静态分析抓不到，必须显式声明
+    "rtree",
     "uvicorn.logging", "uvicorn.loops.auto",
     "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",
 ]
