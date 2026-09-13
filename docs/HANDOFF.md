@@ -11,6 +11,53 @@
 
 ---
 
+## 2026-09-14 第三十七轮：导入管线性能 —— 两处 Python 循环向量化（4.5min → 62s）
+
+用户反馈高面数导入慢。cProfile 剖析 154k 面摩托：瓶颈不是"没并行"，是两个纯 Python 循环 ——
+烘焙逐面采样循环 **200s**（96% 占比）+ validate 的 `uv_overlap` **169s**。xatlas（~90s）与
+最近点查询（8.3s，rtree）本身不是问题；Voronoi 查询本来就多线程。
+
+| 位置 | 修复 |
+|---|---|
+| `bake._bake_diffuse_software_impl` | 逐面采样循环向量化：重心坐标一次批处理（`points_to_barycentric` 传全量数组）、UV 用 `einsum`、按贴图对象分组后整段 numpy 采样，因子/黑面规则向量化同语义 |
+| `uv.uv_overlap` | 网格桶改 CSR 风格（numpy 分组替代 dict 逐面插入），点-三角形包含测试批处理（`_points_in_triangle_batch`），逐点逐候选循环 → 候选对数组 + 分块（1M 对/块，防病态 UV 撑爆内存）；语义逐条对齐：同样的内点采样、UV 缝相邻豁免、1e-6 margin、双向标记 |
+
+实测（154k 面摩托，打包版真机）：软件烘焙 250s → **10.8s**（23×）；uv_overlap 169s → **11.4s**（15×）；
+**全管线 4.5min → 62s**（repair ~10s / uv ~30s / bake ~15s / validate ~20s / 渲染写盘 ~10s）。
+输出与向量化前一致（图集绿占比 7.28% vs 7.72%，浮点舍入级差异）。
+
+**教训**：性能问题先 cProfile 拿数字再动手 —— 凭直觉会去开多线程，实际是循环没向量化；
+scipy.cKDTree 的 `workers=-1` 和 `trimesh.proximity`（rtree 逐点查询）性能差 50 倍，但后者
+8s 的占比不值得再造轮子。
+
+验证：118 passed（含 9 个烘焙/对齐回归 —— 向量化语义一致性由红绿图集、对齐正反例、
+双套 UV 测试锁定）。已重新打包。上一轮的"0% 绿"误会也在此澄清：早前对照实验的
+"源模型本来就是黑的"结论是错的，根因正是本轮第 3 条软渲染浮点截断 bug。
+
+---
+
+## 2026-09-14 第三十六轮：导入不限面数（用户拍板）
+
+用户决策：导入的模型**不再限制面数**（否掉了第三十五轮末的"自适应预算"提案，直接放开）。
+
+| 位置 | 内容 |
+|---|---|
+| `models.SpecPreset.face_budget` | 类型放宽 `int | None`；**None = 不限**（默认仍 5000，生成流程不受影响） |
+| `routers.assets._import_spec` | 新辅助：导入路径的规格 = 预设拷贝 + `face_budget=None`；`/import` 与 `/import-mesh` 两个入口都换用它（生成流程的 /upload 仍走原预设） |
+| `pipeline.run_pipeline` | `spec.face_budget is None` 时从 step_list 剔除 DECIMATE（不产生空跳版本节点） |
+| `validate._rule_face_budget` | `face_budget is None` → 规则 SKIPPED（"该资产不限面数"），不再回落到 5000 默认（旧代码 `or` 会把 None 吞掉） |
+| 前端 | 详情页「面数预算」显示"不限（导入模型不削减）"；types.ts `face_budget: number \| null` |
+
+**代价与边界（预期内）**：摩托实测 uv 展开 ~100s、软件烘焙 ~240s、全管线 ~4 分钟（有减面时 ~2 分钟）；
+版本文件显著变大（bake 版 GLB 含 154k 面 + 2048² 图集）。转台软渲染 8 帧在 15 万面上耗时可接受。
+导入资产校验只剩命名规范失败（文件名含 `-`），AI 编辑改名即可过。
+
+验证：118 passed（新增 test_face_budget_skipped_when_unlimited；导入测试断言 head 面数 = 源模型
+面数、无 decimate 版本）；typecheck 通过；重打包后真机重导摩托：head 154,462 面 / 476 组件原样
+保留，缩略图与转台 = 绿色川崎、细节完整（后视镜/风挡/车壳棱线清晰）。
+
+---
+
 ## 2026-09-14 第三十五轮：摩托颜色三连修（texCoord / 空间对齐 / 软渲染黑屏）
 
 用户贴图对比：源模型是亮绿川崎，我们渲出来是黑车。第三十四轮修完网格后又追出**三个独立的

@@ -116,6 +116,15 @@ def _discard_broken_asset(asset_id: str) -> None:
         store.delete_asset(asset_id)
 
 
+def _import_spec(preset_key: str) -> SpecPreset:
+    """导入路径的规格：预设只取工程约定（引擎/轴心/单位等），**面数不限**。
+
+    用户导入的模型是成品，不是我们控制生成的 —— 削减面数只会毁掉它
+    （摩托实测 17.6 万面被压到 5000 = 碎车）。生成流程仍走预设预算。
+    """
+    return _resolve_preset(preset_key).model_copy(update={"face_budget": None})
+
+
 def _image_sources(asset: Asset) -> list[Path]:
     return [Path(p) for p in asset.source_files if Path(p).suffix.lower() in IMAGE_SUFFIXES]
 
@@ -205,7 +214,7 @@ async def create_asset_from_mesh(
             detail=f"不支持的网格格式 {suffix}。支持：{'、'.join(sorted(MESH_SUFFIXES))}",
         )
 
-    spec = _resolve_preset(preset_key)
+    spec = _import_spec(preset_key)
     asset = store.create_asset(name=name, spec=spec, source=AssetSource.MESH.value)
     target = store.write_source_bytes(asset.id, Path(file.filename or "input.glb").name, await file.read())
 
@@ -267,8 +276,6 @@ async def import_assets(
     """
     if not files:
         raise HTTPException(status_code=400, detail="没有收到任何文件。")
-    presets = load_spec_presets()
-    spec = presets.get(preset_key) if preset_key else None
     imports: list[dict[str, Any]] = []
 
     for file in files:
@@ -277,7 +284,7 @@ async def import_assets(
         single_name = name.strip() if len(files) == 1 and name.strip() else filename.rsplit(".", 1)[0]
 
         if suffix in MESH_SUFFIXES:
-            spec_model = spec or _resolve_preset(preset_key)
+            spec_model = _import_spec(preset_key)
             asset = store.create_asset(
                 name=single_name, spec=spec_model, source=AssetSource.MESH.value, kind="model"
             )

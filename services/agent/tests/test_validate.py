@@ -33,6 +33,18 @@ def test_clean_asset_passes(sample_obj):
     assert _result(report, "naming").result == CheckResult.PASS
 
 
+def test_face_budget_skipped_when_unlimited(dirty_glb):
+    """face_budget=None = 不限面数（导入路径）：规则跳过而不是 FAIL。"""
+    mesh = load_mesh(dirty_glb)
+    spec = SpecPreset(face_budget=None, expected_size_m=None)
+
+    report = validate(mesh, dirty_glb, "asset_y", "ver_y", spec, asset_name="SM_Dirty_Prop")
+
+    result = _result(report, "face_budget")
+    assert result.result == CheckResult.SKIPPED
+    assert "不限面数" in result.message
+
+
 def test_face_budget_failure_reports_actual_value(dirty_glb):
     mesh = load_mesh(dirty_glb)
     spec = SpecPreset(face_budget=1000, expected_size_m=None)

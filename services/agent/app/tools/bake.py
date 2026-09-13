@@ -108,7 +108,9 @@ def _bake_diffuse_software_impl(
         report["reason"] = "低模没有可用 UV，底色烘焙跳过。"
         return report
 
-    # 逐面采样颜色（贴图 × 材质因子；无贴图面用因子）
+    # 逐面采样颜色（贴图 × 材质因子；无贴图面用因子）—— 全程向量化：
+    # 逐面 Python 循环（每次单独调重心坐标 + 单像素取色）实测 154k 面 200s，
+    # 批处理一次算完 <5s，语义完全一致。
     centers = np.asarray(low.triangles_center, dtype=np.float64)
     _, _, face_ids = trimesh.proximity.closest_point(high, centers)
     face_ids = np.asarray(face_ids, dtype=np.int64)
@@ -117,24 +119,39 @@ def _bake_diffuse_software_impl(
     low_uv = np.asarray(low.visual.uv, dtype=np.float64)
     high_triangles = np.asarray(high.triangles, dtype=np.float64)
 
-    face_colors = np.full((len(low_faces), 3), 0.5, dtype=np.float64)
-    for index in range(len(low_faces)):
-        fid = face_ids[index]
-        texture = table.face_texture[fid]
+    tex_per_low = [table.face_texture[f] for f in face_ids]
+    factors = table.face_factors[face_ids]  # (N, 3)
+    bary_all = trimesh.triangles.points_to_barycentric(high_triangles[face_ids], centers)
+    corners_all = table.face_uvs[face_ids]  # (N, 3, 2)
+    uv_all = np.einsum("ni,nik->nk", bary_all, corners_all)  # (N, 2)
+
+    face_colors = np.full((len(face_ids), 3), 0.5, dtype=np.float64)
+    no_texture = np.array([t is None for t in tex_per_low])
+    face_colors[no_texture] = factors[no_texture]
+
+    # 有贴图的面按贴图对象分组，整段 numpy 采样
+    by_texture: dict[int, tuple] = {}
+    for index, texture in enumerate(tex_per_low):
         if texture is not None:
-            # 最近点在高模面内的重心坐标 → 该面 UV 空间 → 采样源贴图
-            bary = trimesh.triangles.points_to_barycentric(
-                high_triangles[[fid]], centers[index][None, :]
-            )[0]
-            uv = bary @ table.face_uvs[fid]
-            width, height = texture.size
-            x = min(width - 1, max(0, int(float(uv[0] % 1.0) * width)))
-            y = min(height - 1, max(0, int((1.0 - float(uv[1] % 1.0)) * height)))
-            color = np.asarray(texture)[y, x] / 255.0 * table.face_factors[fid]
-        else:
-            color = table.face_factors[fid]
-        # 纯黑面照填会糊死接缝；全 0 时留中灰
-        face_colors[index] = np.clip(np.where(np.any(color > 0.004), color, 0.5), 0.0, 1.0)
+            by_texture.setdefault(id(texture), (texture, []))[1].append(index)
+
+    for texture, indices in by_texture.values():
+        idx = np.asarray(indices, dtype=np.int64)
+        width, height = texture.size
+        pixels = np.asarray(texture, dtype=np.float64)  # (H, W, 3)
+        uv = np.einsum("ni,nik->nk", bary_all[idx], corners_all[idx])
+        u = np.mod(uv[:, 0], 1.0)
+        v = np.mod(uv[:, 1], 1.0)
+        x = np.clip((u * width).astype(np.int64), 0, width - 1)
+        y = np.clip(((1.0 - v) * height).astype(np.int64), 0, height - 1)
+        face_colors[idx] = (pixels[y, x] / 255.0) * factors[idx]
+
+    # 纯黑面照填会糊死接缝；全 0 时留中灰
+    face_colors = np.clip(
+        np.where(np.any(face_colors > 0.004, axis=1, keepdims=True), face_colors, 0.5),
+        0.0,
+        1.0,
+    )
 
     # 逐像素 Voronoi 填充：每个图集像素取 UV 空间最近的低模面颜色。
     # 不用 PIL 逐面画多边形 —— 细长 UV 三角经常一个像素中心都盖不到（丢色），

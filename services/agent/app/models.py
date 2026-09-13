@@ -95,7 +95,8 @@ class SpecPreset(BaseModel):
 
     name: str = "默认道具"
     category: str = "prop"
-    face_budget: int = 5000
+    # None = 不限面数（导入路径专用：用户模型不削减，管线跳过减面、校验器跳过面数规则）
+    face_budget: int | None = 5000
     want_quads: bool = True
     target_engine: TargetEngine = "unity"
     unit_scale: float = 1.0  # 1.0 = 米制

@@ -520,7 +520,7 @@ export function AssetDetail() {
               <dt>规格</dt>
               <dd>{asset.spec.name}</dd>
               <dt>面数预算</dt>
-              <dd>{asset.spec.face_budget}</dd>
+              <dd>{asset.spec.face_budget ?? "不限（导入模型不削减）"}</dd>
               <dt>目标引擎</dt>
               <dd>{asset.spec.target_engine}</dd>
               <dt>期望尺寸</dt>

@@ -40,7 +40,8 @@ export type TargetEngine = 'unity' | 'unreal' | 'generic';
 export interface SpecPreset {
   name: string;
   category: string;
-  face_budget: number;
+  /** null = 不限面数（导入的模型不削减） */
+  face_budget: number | null;
   want_quads: boolean;
   target_engine: TargetEngine;
   unit_scale: number;

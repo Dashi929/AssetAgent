@@ -124,10 +124,13 @@ def _rule_face_budget(ctx: ValidationContext) -> RuleResult:
     config = ctx.rules.get(rule, {})
     if not config.get("enabled", True):
         return _disabled(rule, label, config)
+    if ctx.spec.face_budget is None:
+        # 导入的资产不限面数：这条契约规则不适用（测不了就说测不了）
+        return _skipped(rule, label, "该资产不限面数（导入模型不削减面数）")
     # 优先级：规格预设 > 类目配置 > 全局默认。
     # 规格预设是美术为**这个资产**明确选的交付契约，比工具的类目默认值更具体，
     # 所以它优先。想让类目配置压过预设，应该给该类目单独配一个规格预设。
-    budget = int(ctx.spec.face_budget or config.get("max", 5000))
+    budget = int(ctx.spec.face_budget)
     faces = int(len(ctx.mesh.faces))
     return RuleResult(
         rule=rule,

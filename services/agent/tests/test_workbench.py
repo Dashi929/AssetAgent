@@ -44,6 +44,14 @@ def test_import_model_runs_pipeline_in_background(client):
     assert detail["asset"]["kind"] == "model"
     assert detail["turntable"], "导入队列应产出转台帧"
 
+    # 导入不限面数（2026-09-14）：不减面，head 保持源模型面数
+    assert detail["asset"]["spec"]["face_budget"] is None
+    assert not [v for v in detail["versions"] if v["op"] == "decimate"], "导入资产不应有减面版本"
+    from app.tools.mesh_io import load_mesh
+
+    head = next(v for v in detail["versions"] if v["id"] == detail["asset"]["head_version_id"])
+    assert len(load_mesh(head["mesh_path"]).faces) == 320  # icosphere(subdivisions=2) 原样保留
+
 
 def test_import_image_creates_2d_asset(client):
     response = client.post(

@@ -143,6 +143,12 @@ async def run_pipeline(
     source_path, parent_id = resolve_input(asset_id)
     total = len(step_list)
 
+    # 导入的资产不限面数（spec.face_budget=None）：减面整步跳过，
+    # 模型保持原始面数进 UV/烘焙（用户模型是成品，削减只会毁掉它）
+    if spec.face_budget is None and JobStep.DECIMATE in step_list:
+        step_list = [s for s in step_list if s is not JobStep.DECIMATE]
+        total = len(step_list)
+
     store.patch_asset(asset_id, status=AssetStatus.PROCESSING)
     progress(0.02, f"读取输入网格：{source_path.name}")
 
